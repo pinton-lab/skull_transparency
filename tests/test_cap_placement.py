@@ -94,6 +94,11 @@ def test_optimum_moves_off_the_foramen_onto_the_good_window():
     assert pl.drop_frac < 0.03, f"optimum should be ~foramen-clean, got {pl.drop_frac:.3f}"
     # and it collects more after-drop energy than the naive straight-into-foramen seat
     assert pl.J_cap > seed["J_cap"]
+    # the positioning score is now WIRED (was always NaN): kept/full cap energy in (0,1]
+    from skull_transparency import PositioningScore
+    sn = pl.extras["score_norm"]
+    assert 0.0 < sn <= 1.0 and np.isfinite(sn)
+    assert PositioningScore.from_placement(pl).normalized == sn
 
 
 def test_reduces_to_brightest_window_with_no_foramen():
@@ -105,6 +110,7 @@ def test_reduces_to_brightest_window_with_no_foramen():
                            n_az=25, el_halfspan_deg=20.0, n_el=7, n_tilt=5, n_yaw=5)
     # no foramen -> nothing dropped, optimum aims at the brightest lobe (the good window)
     assert pl.drop_frac == 0.0
+    assert pl.extras["score_norm"] == 1.0          # kept == full cap energy -> exact 1.0
     assert abs(pl.pose.az_deg - az_g) < 15.0, f"optimum az {pl.pose.az_deg:.0f} not at brightest {az_g:.0f}"
 
 

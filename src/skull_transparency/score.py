@@ -5,8 +5,12 @@ already computes (and that are validated by the transparency tests) into one
 self-describing artifact (``score.json``), with the important caveat baked in.
 
 Definition:
-  * ``normalized``  — 0..1, the chosen window/pose coupling divided by the best
-    achievable over all candidate windows (1.0 == the optimal window).
+  * ``normalized``  — 0..1, the delivered coupling at the chosen placement divided by
+    the loss-free ideal for that device. For ``place_bowl`` / ``place_bowl_optimal``
+    the optimiser returns the argmax window, so this is **1.0 by construction** (it
+    drops below 1 only when a non-optimal window is scored). For the CTX-500 cap
+    (``place_cap_optimal``) it is the fraction of cap energy that survives the no-bone
+    (foramen) drop, i.e. ``J_cap / J_full`` — genuinely ``< 1`` when a leak is unavoidable.
   * ``focal_pressure_proxy`` — ``sqrt(integral_S |G|^2 dS)`` over the chosen aperture:
     the relative achievable focal peak under the optimal (time-reversal) drive
     (arbitrary units). It is the right proxy for PLACEMENT (delivered energy) but
@@ -25,12 +29,14 @@ from pathlib import Path
 SCHEMA = "skull_transparency.positioning_score/1"
 
 _DEFINITION = (
-    "normalized = chosen window coupling / best achievable over all candidate windows "
-    "(1.0 = optimal). focal_pressure_proxy = sqrt(integral_S |G|^2 dS) = the relative "
-    "achievable focal peak under the optimal time-reversal drive (arb. units) — a "
-    "PLACEMENT/energy proxy that OVERSTATES the broadband focusing gain and axial DOF; "
-    "quote those from a broadband/inward re-simulation. incidence_deg = window incidence "
-    "(0 = normal)."
+    "normalized = delivered coupling at the chosen placement / the loss-free ideal for that "
+    "device (1.0 = no loss). For bowl/peak placement the optimiser returns the optimal window, "
+    "so it is 1.0 by construction; for the CTX-500 cap it is the fraction of cap energy "
+    "surviving the foramen/incidence drop (J_cap/J_full), <1 when a leak is unavoidable. "
+    "focal_pressure_proxy = sqrt(integral_S |G|^2 dS) = the relative achievable focal peak "
+    "under the optimal time-reversal drive (arb. units) — a PLACEMENT/energy proxy that "
+    "OVERSTATES the broadband focusing gain and axial DOF; quote those from a "
+    "broadband/inward re-simulation. incidence_deg = window incidence (0 = normal)."
 )
 
 

@@ -19,10 +19,13 @@ import numpy as np
 
 @dataclass(frozen=True)
 class Registration:
-    R_mni_to_sim: np.ndarray        # (3,3) orthonormal: MNI mm displacement -> sim mm displacement
+    R_mni_to_sim: np.ndarray        # (3,3) orthonormal: world mm displacement -> sim mm displacement
     dx_mm: float                    # isotropic sim voxel pitch (mm)
-    target_mni_mm: np.ndarray       # (3,) anchor in MNI RAS mm
+    target_mni_mm: np.ndarray       # (3,) anchor in the world frame (MNI RAS mm for Halle)
     target_fullres_voxel: np.ndarray  # (3,) same anchor as a full-res sim voxel index
+    world_frame: str = "mni_ras_mm"   # label of the world frame the *_mni fields actually live in.
+    #   "mni_ras_mm" for the Halle study; a generic subject (sim.prepare) sets it to its own
+    #   meta['input_frame'] so the placement output does NOT get mis-mapped through tuba's MNI chain.
 
     # ---- coordinate maps (accept (3,) or (N,3); return matching shape) ----
     def mni_to_fullres(self, pts_mni_mm) -> np.ndarray:
@@ -39,14 +42,16 @@ class Registration:
     def to_dict(self, deprecated_affine: dict | None = None) -> dict:
         d = {
             "schema": "skull_transparency.registration/1",
-            "frame_a": "mni_ras_mm",
+            "frame_a": self.world_frame,
             "frame_b": "fullres_voxel",
             "rigid": True,
             "dx_mm": float(self.dx_mm),
             "R_mni_to_sim": self.R_mni_to_sim.tolist(),
             "target_mni_mm": np.asarray(self.target_mni_mm, float).tolist(),
             "target_fullres_voxel": np.asarray(self.target_fullres_voxel, float).tolist(),
-            "source": "tuba mni_ras_to_subject_ras + pose (Arot,M) with svd-cleaned Amn rotation",
+            "source": ("tuba mni_ras_to_subject_ras + pose (Arot,M) with svd-cleaned Amn rotation"
+                       if self.world_frame == "mni_ras_mm"
+                       else f"pose from sim.prepare (world frame {self.world_frame!r})"),
         }
         if deprecated_affine is not None:
             d["deprecated_affine"] = deprecated_affine
@@ -59,6 +64,7 @@ class Registration:
             dx_mm=float(d["dx_mm"]),
             target_mni_mm=np.asarray(d["target_mni_mm"], float),
             target_fullres_voxel=np.asarray(d["target_fullres_voxel"], float),
+            world_frame=d.get("frame_a", "mni_ras_mm"),
         )
 
     def to_json(self, path, deprecated_affine: dict | None = None) -> None:

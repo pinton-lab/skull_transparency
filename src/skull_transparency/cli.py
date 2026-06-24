@@ -102,8 +102,10 @@ def _cmd_place(args):
         bc = st.BowlConstraints(focal_length_mm=args.focal_length or 60.0)
     pl = st.place_bowl(tmap, bc)
 
+    world_frame = getattr(bundle.registration, "world_frame", "mni_ras_mm")
     (out / "placement.json").write_text(
-        json.dumps(st.to_placement_dict(pl, target_name=args.target_name), indent=1))
+        json.dumps(st.to_placement_dict(pl, target_name=args.target_name,
+                                        world_frame=world_frame), indent=1))
     score = PositioningScore.from_placement(pl, target_name=args.target_name or "target")
     score.to_json(out / "score.json")
 

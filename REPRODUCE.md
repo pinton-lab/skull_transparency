@@ -1,7 +1,7 @@
 # REPRODUCE — manuscript PDF and results
 
-Pinned entry points for regenerating the paper and its numbers. This repo is **not
-git-tracked**, so treat the files listed under "Results-critical — do not modify" as
+Pinned entry points for regenerating the paper and its numbers. The repo is now
+git-tracked (main); treat the files listed under "Results-critical — do not modify" as
 the frozen baseline; the new front-end work (see bottom) is additive and inert.
 
 ## 1. The manuscript

@@ -173,9 +173,11 @@ def write_run_descriptor(sim_dir, spec: TransducerSpec, pose: Pose, target_phys_
         dx_mm=float(spec.dx_mm),
         target_mni_mm=np.asarray(target_phys_mm, float),
         target_fullres_voxel=tgt_vox,
+        world_frame=input_frame,                               # the TRUE world frame (not MNI)
     )
-    # NB: Registration.to_dict labels the world frame "mni_ras_mm"; the true label is
-    # meta['input_frame']. Generalising that label is a downstream (output-adapter) change.
+    # world_frame carries meta['input_frame'] through registration.json, so the placement
+    # output (neuromod.to_placement_dict) reports coordinates in the user's frame and does NOT
+    # mis-map a non-MNI subject through tuba's MNI->Halle chain.
     reg.to_json(sim_dir / "registration.json")
     return meta
 

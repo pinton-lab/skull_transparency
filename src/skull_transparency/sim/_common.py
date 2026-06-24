@@ -104,7 +104,10 @@ def focal_box(dent, N, fb=36):
 
 
 def array_coords_from_i32(path):
-    """Read ``*_array_coords.i32``: int32, reshape ``[3, nA]`` then transpose."""
+    """Read ``*_array_coords.i32``: a flat int32 stream of interleaved x,y,z per element
+    (the C-order ravel of an ``(nA, 3)`` matrix), reshaped back to ``(nA, 3)``. Returns
+    ``(coords_float64, nA)`` -- the exact inverse of
+    :func:`skull_transparency.sim.prepare._write_array_coords_i32`."""
     a = np.fromfile(path, dtype="<i4")
     nA = a.size // 3
     return a.reshape(nA, 3).astype(np.float64), nA

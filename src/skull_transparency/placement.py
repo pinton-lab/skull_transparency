@@ -45,7 +45,10 @@ class BowlPlacement:
     beam_dir_mni: np.ndarray              # unit, apex -> target
     target_mni_mm: np.ndarray
     window_center_mni_mm: np.ndarray
-    transparency_score: float            # 0..1, chosen window vs best possible
+    transparency_score: float            # chosen-window footprint score / best legal candidate.
+    #   ==1.0 BY CONSTRUCTION here: place_bowl returns the argmax window, so it equals its own max.
+    #   It drops below 1 only when a NON-optimal window is scored. Use incidence_deg / the footprint
+    #   extras (not this) to discriminate the optimal placement's quality.
     apex_fullres_voxel: np.ndarray
     window_center_fullres_voxel: np.ndarray
     incidence_deg: float
@@ -394,24 +397,33 @@ def score_cap_pose(field: CapField, pose, bone_ray_test, *, roc_mm: float = 63.2
     n_cap = len(pts)
     keep = np.asarray(bone_ray_test(pts, field.target_vox), bool)      # True = crosses bone = keep
     n_kept = int(keep.sum())
-    if n_kept:
-        kept = pts[keep]
-        d = kept - field.target_vox
+    # Project + incidence-weight EVERY cap element to get the loss-free reference energy J_full;
+    # the kept subset is the after-drop delivered energy J_cap. Boolean masks preserve order, so
+    # ``contrib[keep]`` sums the kept elements in the SAME order as the old kept-only path —
+    # J_cap is bit-identical; J_full / score_norm are purely additive.
+    if n_cap:
+        d = pts - field.target_vox
         L = np.linalg.norm(d, axis=1)
         R_mm = L * field.dx_mm
         dhat = d / (L[:, None] + 1e-30)
         j = field.tree.query(dhat, workers=-1)[1]
         G2 = field.E_inv[j] / (R_mm ** 2 + 1e-30)                      # Pinton radial projection to R_i
         cos_i = np.clip(np.sum(dhat * field.normal[j], axis=1), 0.0, 1.0)
-        J_cap = float((G2 * cos_i ** 2).sum())
+        contrib = G2 * cos_i ** 2
+        J_full = float(contrib.sum())
+        J_cap = float(contrib[keep].sum())
     else:
-        J_cap = 0.0
+        J_full = J_cap = 0.0
+    # positioning efficiency in [0,1]: fraction of the cap's incidence-weighted energy that
+    # survives the no-bone (foramen) drop (1.0 = nothing dropped; <1 = an unavoidable leak).
+    score_norm = (J_cap / J_full) if J_full > 0.0 else 0.0
     # window = surface patch along the beam axis (target -> apex direction)
     da = apex - field.target_vox
     da = da / (np.linalg.norm(da) + 1e-30)
     wj = int(field.tree.query(da, workers=-1)[1])
     cos_w = float(np.clip(field.surf_dir[wj] @ field.normal[wj], -1.0, 1.0))
-    return dict(J_cap=J_cap, n_cap=n_cap, n_kept=n_kept, n_dropped=n_cap - n_kept,
+    return dict(J_cap=J_cap, J_full=J_full, score_norm=score_norm,
+                n_cap=n_cap, n_kept=n_kept, n_dropped=n_cap - n_kept,
                 drop_frac=(n_cap - n_kept) / max(n_cap, 1), window_idx=wj,
                 window_vox=field.surf_vox[wj], window_dist_mm=float(field.rad_mm[wj]),
                 window_incidence_deg=float(np.degrees(np.arccos(cos_w))),
@@ -428,7 +440,8 @@ def _cap_placement_from_score(field: CapField, s: dict) -> CapPlacement:
         window_mni_mm=win_mni, window_dist_mm=s["window_dist_mm"],
         window_incidence_deg=s["window_incidence_deg"], apex_vox=s["apex"], aim_vox=s["aim"],
         focus_vox=s["focus"], focus_to_target_mm=foc_to_tgt,
-        extras={"window_idx": s["window_idx"]})
+        extras={"window_idx": s["window_idx"], "score_norm": s["score_norm"],
+                "J_full": s["J_full"]})
 
 
 def place_cap_optimal(field: CapField, bone_ray_test, *, seed_az_deg: float, seed_el_deg: float,
