@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "skull-transparency"
+version = "0.1.0"
+description = "Skull acoustic transparency maps (time-reversal reciprocity) and transducer placement for transcranial ultrasound."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Gianmarco Pinton", email = "gianmarco.pinton@gmail.com" }]
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = ["numpy>=1.24", "scipy>=1.10"]
+
+[project.optional-dependencies]
+registration = ["nibabel>=5.0", "tuba"]                  # MNI<->subject via tuba; NRRD frame for Halle bundles, MNI fallback otherwise
+analysis = ["scikit-image>=0.21"]                        # surface meshing for viz/QC
+viz = ["matplotlib>=3.7", "napari", "imageio-ffmpeg"]    # surface render / movie
+dev = ["pytest>=7.4"]
+solver = ["fullwave2-ultra"]   # GPU preflight + binary resolution for run_solver=True (bench_3d_opt)
+# The CUDA solver EXECUTABLE (fullwave2-ultra `bench_3d_opt`) is distributed separately
+# (PolyForm Noncommercial); point FULLWAVE2_BIN at it, or install the [solver] extra to
+# resolve/preflight it. See src/skull_transparency/sim/.
+
+[project.scripts]
+skull-transparency = "skull_transparency.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.uv.sources]
+tuba = { path = "../tuba", editable = true }
+fullwave2-ultra = { path = "../fullwave2-ultra", editable = true }

@@ -1,0 +1,59 @@
+# ──────────────────────────────────────────────────────────────
+# skull_transparency
+# ──────────────────────────────────────────────────────────────
+
+# Large simulation data — ~275 GB of solver fields; never version-controlled.
+# (Aexp.dat / c.dat / icmat.dat ≈ 2 GB each.) Reproduced via REPRODUCE.md.
+runs/
+
+# Manuscript kept out of this repo (lives/builds elsewhere). Excluding the
+# directory also sweeps the ~50 MB compiled PDFs, 53 MB of figs, and the
+# historical *.tex / *.bak backups in one rule.
+manuscript/
+
+# Copyrighted third-party reference article — do not redistribute.
+1-s2.0-*.pdf
+
+# Binary solver field / array dumps (only ever produced under runs/, but be safe).
+*.dat
+*.npy
+*.npz
+
+# ── Python build / packaging / caches ──
+__pycache__/
+*.py[cod]
+*.egg
+*.egg-info/
+build/
+dist/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# ── LaTeX build artifacts (tutorial/) ──
+*.aux
+*.log
+*.out
+*.toc
+*.lof
+*.lot
+*.bbl
+*.blg
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+
+# ── Editor / OS / build stamps / backups ──
+*~
+*.bak
+*.bak_*
+*.tex~
+*.tex.bak*
+.stamp
+.DS_Store
+
+# ── Claude Code local state ──
+.claude/

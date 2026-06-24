@@ -1,0 +1,13 @@
+{
+ "bundle": {
+  "data_dir": "/celerina/gfp/mfs/hemisphere_tr/data/halle_hemis_ppw55",
+  "meta": "/celerina/gfp/mfs/hemisphere_tr/sim/meta.json",
+  "transform": "/celerina/gfp/mfs/hemisphere_tr/sim/ppw55_transform.npz",
+  "target_name": "dentate_left"
+ },
+ "bowl": {
+  "focal_length_mm": 60.0,
+  "bowl_radius_mm": 15.0,
+  "theta_max_deg": 35.0
+ }
+}

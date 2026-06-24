@@ -1,0 +1,571 @@
+\documentclass[10pt]{article}
+\usepackage[a4paper,margin=0.5in]{geometry}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{xcolor}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage{caption}
+\usepackage{animate}
+\usepackage{titlesec}
+\usepackage[colorlinks=true,linkcolor=blue!55!black,urlcolor=blue!55!black,
+            citecolor=blue!55!black]{hyperref}
+
+\definecolor{inpkg}{HTML}{2c6fbf}
+\definecolor{upstream}{HTML}{d98030}
+\definecolor{solver}{HTML}{2e8b57}
+\definecolor{codebg}{HTML}{f5f6f8}
+\definecolor{rulec}{HTML}{cccccc}
+\definecolor{notebg}{HTML}{fbf4e8}
+
+% ---- compact layout ----
+\setlength{\parskip}{0.3em}
+\setlength{\parindent}{0pt}
+\setlength{\abovedisplayskip}{3pt}\setlength{\belowdisplayskip}{4pt}
+\titlespacing*{\section}{0pt}{1.1ex plus .2ex}{0.5ex}
+\titlespacing*{\subsection}{0pt}{0.8ex plus .2ex}{0.3ex}
+\titleformat{\section}{\large\bfseries\color{black!85}}{\thesection}{0.6em}{}
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection}{0.5em}{}
+\captionsetup{font=small,labelfont=bf,labelsep=period,skip=3pt}
+\setlist{nosep,topsep=2pt,leftmargin=1.5em}
+
+\lstdefinestyle{sh}{basicstyle=\ttfamily\footnotesize,backgroundcolor=\color{codebg},
+  breaklines=true,frame=single,rulecolor=\color{rulec},framesep=4pt,aboveskip=4pt,
+  belowskip=2pt,xleftmargin=3pt,language=bash,showstringspaces=false,keywordstyle=\color{solver}}
+\lstdefinestyle{py}{basicstyle=\ttfamily\footnotesize,backgroundcolor=\color{codebg},
+  breaklines=true,frame=single,rulecolor=\color{rulec},framesep=4pt,aboveskip=4pt,
+  belowskip=2pt,xleftmargin=3pt,language=Python,showstringspaces=false,
+  keywordstyle=\color{inpkg},commentstyle=\color{gray}\itshape}
+\lstset{style=py}
+\newcommand{\code}[1]{\lstinline[basicstyle=\ttfamily]|#1|}
+\newcommand{\callout}[2]{%
+  \begingroup\setlength{\fboxsep}{6pt}%
+  \noindent\colorbox{notebg}{\parbox{\dimexpr\linewidth-2\fboxsep\relax}{%
+    \textbf{#1}\\[1pt]\small #2}}\endgroup\par\vspace{2pt}}
+
+\title{\vspace{-9mm}\textbf{The skull transparency targeting tool}\\[1mm]
+\large What it does, how the grid and target are defined, and how to bring your own CT}
+\author{\texttt{skull\_transparency} package}
+\date{\today}
+
+\begin{document}
+\maketitle
+\vspace{-7mm}
+
+\section{What the tool does}
+
+Given a subject's skull and a deep brain target, the tool finds \textbf{where to place
+a focused-ultrasound transducer, and at what pose}, to couple acoustic energy through
+the skull onto that target. It works by \emph{acoustic reciprocity}: rather than search
+transducer positions by trial, it places a virtual point source \emph{at the target}
+and runs one full-wave solve so the wave propagates \textbf{outward} through the skull,
+recording where it emerges on the outer skull surface and with what phase. Bright,
+in-phase surface patches are exactly the good acoustic windows; re-emitting that
+recording \textbf{time-reversed} converges back onto the target (Figure~\ref{fig:movie}).
+The tool then searches that recorded surface for the best window and reports a concrete
+transducer placement plus a coupling score.
+
+\begin{figure}[H]\centering
+\animategraphics[controls,loop,width=0.82\linewidth]{12}{../manuscript/figs/movie_frames/frame-}{0}{134}
+\caption{Full-wave transcranial propagation (plays in Acrobat and compatible PDF
+viewers; otherwise one representative frame is shown). Grey = skull, cyan = the rigid
+occipital bowl, green $+$ = the dentate target. First the \textbf{outward} diverging
+wavefront sweeps from the target out to the full bowl; then the \textbf{inward}
+time-reversed re-emission converges back to refocus on the target. The outward pass
+records where the skull is acoustically ``transparent'', the data the tool reads to
+choose a window.}
+\label{fig:movie}
+\end{figure}
+
+\section{The pipeline, end to end}
+
+The \texttt{skull\_transparency} package is the pure-Python \emph{consumer} end of a
+longer chain (Figure~\ref{fig:pipeline}). It contains no DICOM segmentation or
+Hounsfield-unit code, since the boundary is the HU$\to$property mapping, not file I/O. Its
+world begins at the \textbf{medium maps} (sound speed $c$, density $\rho$, absorption
+$\alpha$) and their \textbf{voxel-to-world affine}, with a sound-speed map alone as the
+minimal fallback. A single \code{prepare} call
+then sizes and poses the grid, resamples the medium and writes the solver inputs; one
+outward GPU solve produces the surface recordings; and the pure-Python back half builds
+a bundle, computes the transparency map and places the transducer. The only
+irreducibly-yours piece is the HU$\to$sound-speed model, which is scanner-specific.
+
+\begin{figure}[H]\centering
+\includegraphics[width=0.66\linewidth]{figs/fig1_pipeline.png}
+\caption{The data flow and the artifact each step writes. Orange is upstream (you
+supply the CT and its HU$\to c$ map); green is the full-wave GPU solver; blue is the
+pure-Python package. \code{prepare} is the ingestion door. It consumes a sound-speed
+map plus an affine and writes \code{c.f32}, \code{meta.json} and \code{registration.json}.}
+\label{fig:pipeline}
+\end{figure}
+
+\section{How the grid is defined in space}\label{sec:grid}
+
+We use as a concrete example the values in the manuscript whole-skull run
+(\code{halle_hemis_tr_6ppw}), with every number from its \code{meta.json}. (That run was
+a hand-cropped \emph{anisotropic} box; the generic \code{prepare} path emits a cube
+sized from the bowl reach. The geometry is the same; only the crop differs.)
+
+\subsection{The full-resolution grid and its samples in x, y, z}
+
+The domain is an \textbf{isotropic-pitch, skull-centred voxel grid}. It is \emph{not} a
+cube. The three axes hold different numbers of samples.
+
+\begin{center}\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+quantity & symbol & default value \\
+\midrule
+samples $(i,j,k)$ & $N$ & \textbf{$652\times814\times650$}  ($\approx3.45\times10^{8}$ voxels) \\
+voxel pitch (isotropic) & $\delta$ & \textbf{0.25 mm} $= c_0/(f_0\cdot\mathrm{ppw})$ \\
+physical extent & $N\delta$ & $163\times203.5\times162.5$ mm \\
+center frequency & $f_0$ & 1.0 MHz \\
+reference sound speed & $c_0$ & 1540 m/s \\
+points per wavelength & ppw & 6.16 \\
+absorbing boundary & attenuating & $+96$ voxels \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+So the \textbf{samples in x, y, z differ}: $652$ along $i$ (left--right), $814$ along
+$j$ (anterior--posterior), $650$ along $k$ (superior--inferior). The \emph{pitch} is the
+same 0.25 mm on all three axes; the \emph{extent} is not, because the skull is longer
+front-to-back than it is wide. The graded sound-speed volume \code{halle_c_graded.f32}
+holds these $\approx3.45\times10^{8}$ float32 samples in Fortran order (1.38 GB); the
+GPU solver keeps fourteen such grids (56 B/voxel), about 28 GB with the $+96$-voxel
+attenuating boundary and a wrapping array, on one 48 GB GPU.
+
+\subsection{Choosing frequency and resolution}
+
+The pitch is set by the \emph{acoustics}, not by the CT. You choose the
+\textbf{frequency} $f_0$ (physical) and a target \textbf{ppw} ($\approx 6$, numerical);
+everything else follows, with the grid \emph{size} derived from the physical extent,
+never typed in.
+\[
+\delta = \frac{c_0}{f_0\cdot\mathrm{ppw}}, \qquad
+N_\text{axis} = \big\lceil \mathrm{extent}_\text{axis}/\delta \big\rceil .
+\]
+$\delta$ follows the wavelength, not the CT's resolution. \code{prepare} resamples the
+CT to $\delta$ (downsample if finer, interpolate if coarser). At fixed ppw the pitch
+scales as $1/f_0$ and the voxel count as $f_0^3$, so frequency is the binding
+feasibility lever.
+
+\begin{center}\small
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+$f_0$ & $\delta$ & ppw & $N$ $(x,y,z)$ & GPU \\
+\midrule
+0.25 MHz & 1.0 mm & 6.16 & $163\times204\times163$ & 1.1 GB \\
+0.5 MHz & 0.5 mm & 6.16 & $326\times407\times325$ & 5.0 GB \\
+\textbf{1 MHz} & \textbf{0.25 mm} & \textbf{6.16} & $652\times814\times650$ & \textbf{28.4 GB} \\
+2 MHz & 0.125 mm & 6.16 & $1304\times1628\times1300$ & 189 GB \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+1 MHz already fills a 48 GB GPU; 2 MHz does not fit on one; the half-megahertz CTX-500
+cases are an order of magnitude cheaper. The standalone \code{build_grid.py} reproduces
+this so you can size a run before committing a GPU.
+\begin{lstlisting}[style=sh]
+$ python build_grid.py --f0 1e6 --ct-pitch 0.5
+grid pitch delta    0.25 mm   = c0 / (f0 * ppw)
+grid size N         652 x 814 x 650  voxels   (345 M)
+GPU memory (+bnd)   ~28.4 GB   (56 B/voxel)
+your CT (0.5 mm)   resample to delta: interpolate up 2x
+\end{lstlisting}
+
+\subsection{Where the box sits in space}
+
+The box is placed into world space by a rigid (orthonormal) map $R$ plus one anchored
+point $(p_*,v_*)$, which is exactly the information in a NIfTI affine
+(Figure~\ref{fig:grid}). For the reference run the anchor is the left dentate nucleus,
+$p_*=\mathrm{MNI}(-12,-57,-34)$ mm $\Leftrightarrow v_*=(372.7,324.7,140.6)$ vox, with
+$R=\mathrm{diag}(-1,1,1)$, so the grid is \textbf{axis-aligned with anatomy} ($i$ Left,
+$j$ Anterior, $k$ Superior), the $\det=-1$ being a left/right handedness flip, not a
+rotation. Any orientation is legal, because the \code{prepare} path rotates your
+\code{--approach} vector onto $+Z$ and reads anatomical orientation straight off the
+sign and permutation of the affine, so no MNI is required. Because the whole skull and a
+wrapping array share this one domain, a single outward solve records the entire bone
+surface (the coupling map), a decimated interior volume (the focal spot) and the
+per-element signals (the phase) in one pass, with no truncation and no separate focusing
+model. In code, this map is the \code{Registration} dataclass in \code{registration.py}
+($R$ as \code{R_mni_to_sim}, $\delta$ as \code{dx_mm}, the anchor as
+\code{target_mni_mm} and \code{target_fullres_voxel}), serialized to
+\code{registration.json}. The grid shape, \code{dent_grid} and \code{axis_map} live in
+\code{meta.json}.
+
+\begin{figure}[H]\centering
+\includegraphics[width=\linewidth]{figs/fig_grid.png}
+\caption{Left, the $652\times814\times650$ box drawn in world (MNI) coordinates;
+axis-aligned, so the grid voxel axes (green, $i$ runs Left) coincide with the anatomical
+axes (black) up to the L/R flip. Right, the rigid map that places it, one orthonormal
+$R$ and one anchored point, which together are exactly the $4\times4$ input affine
+($\mathrm{affine}[:3,:3]=\delta R^{\!\top}$, the translation pins the anchor).}
+\label{fig:grid}
+\end{figure}
+
+\section{How the target is defined}
+
+A target is just a \textbf{point in world millimetres} plus an \textbf{approach
+direction}. You pass the target coordinate in whatever frame your affine uses (MNI RAS
+is typical) and a unit vector pointing from the target out toward the skin; \code{prepare}
+poses the grid so that approach is $+Z$, seats the recording surface on that side, and
+echoes the target's grid voxel into \code{meta.json} (\code{dent_grid}) so you can
+confirm placement. The three deep targets used to demonstrate the method
+(Figure~\ref{fig:targets}) are the left dentate nucleus $(-12,-57,-34)$, the thalamus
+$(-12,-18,8)$ and the dorsal anterior cingulate $(-4,24,28)$, each localized in MNI and
+mapped into the skull by the rigid registration.
+
+\begin{figure}[H]\centering
+\includegraphics[width=0.82\linewidth]{../manuscript/figs/targets_in_skull.png}
+\caption{The three deep targets in the skull frame (semi-transparent skull, three
+views): the left dentate nucleus (cyan, posterior fossa), thalamus (gold, central) and
+dorsal anterior cingulate (magenta, anterior). Each is defined as an MNI point and
+mapped into the skull by the rigid map of Figure~\ref{fig:grid}.}
+\label{fig:targets}
+\end{figure}
+
+The single most common import bug is a flipped target, a sign error in the affine
+mirrors the skull, so a left-side target lands on the right. Always confirm
+\code{dent_grid} sits where you expect (seated in from the approach face, correct
+laterality) before trusting a result, because nothing throws, it just gives a quietly wrong
+answer.
+
+\section{The medium maps for speed, density, and attenuation}
+
+The medium is three co-registered volumes (sound speed $c$, density $\rho$, absorption
+$\alpha$) plus a scalar nonlinearity $\beta$ (default 5.5); the solver forms only the
+bulk modulus $K=c^2\rho$ internally. \textbf{By default the maps and $\beta$ are
+user-defined} (Figure~\ref{fig:medium}): you supply them with whatever HU$\to$property
+models you trust, since the right mapping depends on the scanner. The reference subject
+maps Hounsfield units to a piecewise-linear speed ($1540\to2900$ m/s) and density
+($1000\to2200$ kg/m$^3$) and a CT-porosity absorption ($0.4$ dB MHz$^{-1}$ cm$^{-1}$ in
+soft tissue/water, rising in bone). When you supply only a speed map, \code{prepare}
+fills the rest. $\beta$ defaults to 5.5 (\code{meta.json} key \code{beta}),
+\code{--alpha-map} overrides the porosity model, \code{--rho-map} overrides the
+synthesized density, and otherwise $\rho$ comes from the ramp
+$\rho(c)=1000+\mathrm{clip}((c-1540)/1360,0,1)\cdot1200$. At the linear $1$ Pa drive used for
+the reference results $\beta$ has no effect; it is carried in the medium only for
+finite-amplitude runs.
+
+\begin{figure}[H]\centering
+\includegraphics[width=0.92\linewidth]{figs/fig5_medium.png}
+\caption{The medium is three user-defined maps ($c$, $\rho$, $\alpha$) plus a scalar
+nonlinearity $\beta$ (default 5.5); the solver forms only $K=c^2\rho$. If only a speed
+map is available, $\rho$ can be synthesized from $c$ (right).}
+\label{fig:medium}
+\end{figure}
+
+
+\section{Importing your own CT, step by step}\label{sec:steps}
+
+The one irreducibly-yours piece is the HU$\to$sound-speed model; everything downstream
+is shipped.
+
+\begin{enumerate}[leftmargin=1.6em]
+\item \textbf{Build the medium maps (yours).} Map Hounsfield units to a sound-speed
+volume $c$ (m/s); optionally density $\rho$ and absorption $\alpha$. Save $c$ as a
+\textbf{NIfTI} (whose \code{sform} carries the affine) or a \code{.npy} plus a separate
+$4\times4$ affine.
+\item \textbf{Pick a transducer spec.} A \code{TransducerSpec} JSON fixes the pitch and
+recording geometry, $\delta=c_0/(f_0\cdot\mathrm{ppw})$. Use the CTX-500 preset or give
+\code{f0_hz}, \code{roc_mm}, \code{aperture_mm}, \code{ppw}.
+\item \textbf{Prepare the run (shipped).}
+\begin{lstlisting}[style=sh]
+skull-transparency prepare --c-map c.nii.gz --target -12,-57,-34 \
+    --approach 0,0,1 --transducer ctx500.json --out run/
+\end{lstlisting}
+For a \code{.npy} c-map add \code{--affine A.npy}. \code{prepare} resamples to $\delta$,
+poses the grid, and writes \code{c.f32}, \code{meta.json}, \code{array_coords.i32} and a
+rigid \code{registration.json}.
+\item \textbf{Run the outward full-wave solve (GPU).} The Fullwave2 /
+\code{fullwave2-ultra} step; install the \code{.[solver]} extra and point
+\code{FULLWAVE2_BIN} at the binary. Section~\ref{sec:sim} covers the two-phase solve
+and how the acoustic field is computed from it.
+\item \textbf{Extract and place (pure Python).}
+\begin{lstlisting}[style=py]
+import skull_transparency as st
+bundle = st.load_bundle("run/bundle")            # after `skull-transparency extract`
+tmap   = st.compute_transparency_map(bundle)     # per-patch coupling
+pl     = st.place_bowl(tmap, st.BowlConstraints(focal_length_mm=63.2))  # best window + pose
+\end{lstlisting}
+From the console, run \code{skull-transparency extract ...} then
+\code{skull-transparency place --bundle run/bundle --out result/}, which calls
+\code{place_bowl} exactly as above. (The manuscript's pose-optimised CTX-500 cap method is
+\code{place_cap_optimal}, which instead takes a \code{CapField} plus seed az/el angles.)
+\end{enumerate}
+
+\section{Running the time-reversal simulation and computing the field}\label{sec:sim}
+
+The solve has \textbf{two phases} (Figure~\ref{fig:movie} animates both). The
+\textbf{outward} phase places a virtual point source at the target and propagates it out
+through the skull, recording in one pass the field on the entire bone surface, a
+decimated interior volume, and the per-element array signals. The \textbf{inward} phase
+time-reverses that array recording and re-emits it, so the wave converges back and
+refocuses at the target, recording the focal field (Figure~\ref{fig:focus}).
+
+\subsection{Running the solve}
+
+\code{prepare} writes the sim tree (\code{c.f32}, \code{meta.json},
+\code{array_coords.i32}); the solver is the external Fullwave2 / \code{fullwave2-ultra}
+binary (\code{bench_3d_opt}). The launcher layer writes the solver's \code{.dat} inputs
+(the medium maps $c$, $K=c^2\rho$, $\rho$, $\beta$ and the absorbing-boundary map, the
+source pulse and the recorder coordinates) and invokes it; without \code{--run} it only
+writes the inputs (a dry run):
+\begin{lstlisting}[style=sh]
+export FULLWAVE2_BIN=/path/to/bench_3d_opt       # or install the .[solver] extra
+python -m skull_transparency.sim outward          --sim run/ --out run/ --run --gpuid 0
+python -m skull_transparency.sim inward_windowed   --sim run/ --out run/ --run --gpuid 0
+\end{lstlisting}
+The solver runs at CFL $0.2$; the outward record length is
+$\approx 1.84\,\lvert\mathbf{x}_\mathrm{array}-\mathbf{x}_t\rvert_{\max}/c_0$. Each phase
+writes \code{genout.dat} (the recorded channels and frames). The medium maps depend only
+on $(c,\text{grid})$, so the inward run hardlinks them from the outward run instead of
+rewriting $\sim$10 GB.
+
+\textbf{Corrected vs.\ uncorrected re-emission.} The focal-box launchers take
+\code{--mode} to set the inward drive. \code{tr} (default) re-emits the recorded,
+time-reversed waveform, the \emph{full} aberration correction; \code{geo} fires a
+geometric drive (per-element delay $\tau_i=(\max_j d_j-d_i)/c_0$ from the
+element-to-target distance, a homogeneous-medium assumption with \emph{no} skull
+correction); and \code{flat} is a zero-phase drive (all elements fire in phase, no
+delay). Running \code{geo} or \code{flat} alongside \code{tr} and comparing focal peaks
+quantifies what the aberration correction buys.
+\begin{lstlisting}[style=sh]
+python -m skull_transparency.sim subset_focalbox --mode geo  --selfile sel.i32 --sim run/ --out run/ --run
+python -m skull_transparency.sim subset_focalbox --mode flat --selfile sel.i32 --sim run/ --out run/ --run
+\end{lstlisting}
+
+\subsection{Computing the field}
+
+From the outward record, \code{integrate_outward} forms, per grid voxel, the
+time-integrated intensity $\mathcal{I}=\sum_t p^2(t)$ (deposited energy) and the peak
+pressure $p_{\max}=\max_t\lvert p(t)\rvert$, which is dominated by the clean direct
+arrival. Sampling $p_{\max}$ just outside the bone surface and forming the peak intensity
+$I=p_{\max}^2/(2\rho c)$, distance-corrected for $1/r^2$ spreading, gives the coupling
+(transparency) map the placement search reads. That search weights each patch by incidence
+($\cos^2\theta$ on the true surface normal) and hard-rejects patches beyond $30^\circ$ (the
+water-to-bone longitudinal critical angle, past which the fluid solver's longitudinal
+transmission gives way to unmodeled shear conversion); the resulting incidence-weighted
+objective $\sqrt{J_w}$ is what the placement step and the interactive positioning tool maximize.
+The per-element aberration delays that
+steer the inward re-emission come from the array-element traces (each element's
+direct-arrival time), not from this surface map. From the
+inward record, the converged field gives the focal spot and the on-target peak relative
+to the 1 Pa per-element drive. For the reference dentate the dense $120^\circ$ occipital array
+(the validation aperture of Figure~\ref{fig:focus}) refocuses as a near-wavelength spot
+($-6$ dB FWHM $1.25\times2.5\times2.25$ mm) at $20.7\times$ the per-element drive. A single
+buildable bowl is weaker: the 64 mm transducer the placement step seats refocuses on the
+dentate at $7.9\times$, and the same procedure reaches $15.2\times$ at the thalamus and
+$11.4\times$ at the dACC through their own windows.
+
+\begin{figure}[H]\centering
+\includegraphics[width=0.72\linewidth]{../manuscript/figs/focus_energy_qc.png}
+\caption{The transcranial focal spot at the dentate, computed from the inward re-emission
+at 1 Pa per-element drive (three orthogonal slices through the focal peak, dB relative to
+peak; white contour $=-6$ dB / FWHM). This is the field the inward phase produces; the
+outward phase produces the surface coupling map that chose the window.}
+\label{fig:focus}
+\end{figure}
+
+\subsection{Scaling intensity to a neuromodulation insonication}
+
+The solve is \emph{linear} and probes the skull with the canonical \textbf{two-cycle}
+transmit pulse, so what transfers is an amplitude \textbf{pressure gain} $G$ (focal peak
+pressure per 1 Pa of per-element drive, e.g.\ $20.7\times$ for the reference dentate's
+$120^\circ$ array; a single buildable bowl reaches $7.9\times$) and
+the field \emph{shape}, both independent of pulse length. A neuromodulation insonication
+is instead a long tone burst at $f_0$, pulsed at a duty cycle
+$D=t_\mathrm{on}/t_\mathrm{period}$. Given a per-element drive amplitude $A$ (Pa), convert
+as
+\[
+p_\text{focus}=G\,A,\qquad
+I_\mathrm{sppa}=\frac{p_\text{focus}^2}{2\rho c},\qquad
+I_\mathrm{spta}=D\,I_\mathrm{sppa}.
+\]
+The peak pressure $p_\text{focus}$ and the pulse-average intensity $I_\mathrm{sppa}$
+(the code's \code{peak_intensity}, W/m$^2$) are set by \emph{amplitude only} and do not
+change with pulse length; \textbf{duration enters only through the duty cycle} $D$, in
+the time-average intensity $I_\mathrm{spta}$. Heating and thermal dose then scale as
+$I_\mathrm{spta}\times$ insonication time, while $\mathrm{MI}=\lvert p_-\rvert/\sqrt{f_0}$
+stays peak-based. Two cautions apply. First, do \emph{not} reuse the simulated $\sum_t p^2$ as a
+neuromodulation intensity, because it is the deposited energy of the two-cycle probe, not of
+your burst. Second, $G$ is the clean \textbf{direct-arrival} value, so a long continuous
+burst can accrue reverberant build-up the windowed estimate omits. Treat it as a lower
+bound and confirm with a CW / long-burst re-simulation if you need the steady-state focal
+pressure.
+
+\section{Validating your import}\label{sec:validate}
+
+A wrong or flipped registration does not throw; it gives a wrong answer. Five
+ checks catch almost all of it.
+
+\begin{enumerate}[leftmargin=1.6em]
+\item \textbf{Target voxel.} Confirm \code{meta.json}'s \code{dent_grid} sits where you
+expect (in from the approach face, centred laterally).
+\item \textbf{Eyeball slices.} Render the three orthogonal slices of \code{c.f32} through
+the target, and confirm skull where it should be, target inside brain, no edge wrap-around.
+\item \textbf{Left/right.} A left-side target must land on the left; a mirrored skull is
+a sign error in \code{affine[:3,:3]}.
+\item \textbf{Frame round-trip.} \code{--input-frame} is echoed into \code{meta.json};
+read the output's \code{frame} key before trusting coordinates.
+\item \textbf{No GPU?} Smoke-test install and placement on a synthetic skull with
+\code{python examples/synthetic/run_synthetic.py}.
+\end{enumerate}
+
+If \code{prepare} raises, it is usually a units problem. \emph{``no outer skull surface found''}
+means bone does not read $c>2200$ m/s (check your HU$\to c$ scale), and \emph{``no skull
+surface within \dots of the approach axis''} means \code{--approach} points the wrong way
+(it must go target\,$\to$\,skin).
+
+\section{Limitations and caveats}\label{sec:limits}
+
+\begin{itemize}[leftmargin=1.4em]
+\item \textbf{Intracranial air is mapped to water.} Sinuses and mastoid air-cells read
+as water, so any window whose beam crosses them is not yet trustworthy. This is the most
+important caveat for real clinical CTs; deep solid-bone targets such as the dentate are
+unaffected.
+\item \textbf{The placement score overstates focusing gain.} The single-frequency
+surface integral $\sqrt{J}=\sqrt{\int_S|G|^2\,dS}$ is correct for \emph{choosing} a
+window but overstates the broadband time-reversal gain and depth of field; quote those
+from the inward re-simulation.
+\item \textbf{\code{approach='auto'} is not implemented.} Pass an explicit
+\code{--approach} unit vector (target\,$\to$\,skin).
+\item \textbf{\code{prepare} sizes a cube.} It uses an $N^3$ grid from the bowl reach
+plus a margin rather than tightening to the head bounding box, which is correct but spends
+more voxels than the hand-cropped reference run.
+\end{itemize}
+
+\section{The interactive positioning tool}
+
+For a manual look, the console renders a placement preview (add \code{--interactive} for
+napari, which needs the \code{.[viz]} extra and a display):
+\begin{lstlisting}[style=sh]
+skull-transparency position --bundle run/bundle --out preview.png
+\end{lstlisting}
+A richer manual tool (Appendix A of the PMB manuscript,
+\code{runs/rebuild_6ppw_graded/ctx500_position_tool.py}) renders the skull coloured by
+the placement objective $\sqrt{J_w}$ with a translucent CTX-500 cap and three orthogonal
+slices, with a live score as a percentage of the global peak (Figure~\ref{fig:tool}).
+Keys are arrows = azimuth/elevation, \code{.}/\code{,} = radius, \code{t}/\code{g} and
+\code{y}/\code{h} = tilt/yaw, \code{1}/\code{2}/\code{3} = dentate / thalamus / dACC,
+\code{e} = export, \code{r} = reset. After a one-time \code{--build-cache} the caches
+make every later launch start with no large read.
+
+\begin{figure}[H]\centering
+\includegraphics[width=\linewidth]{../manuscript/figs/positioning_tool.png}
+\caption{The interactive positioning tool, shown for the dentate. Centre, the skull
+surface coloured by the placement objective $\sqrt{J_w}$ (dark to bright = low to high
+single-element coupling) with a translucent 64 mm bowl (cyan) on the occipital window,
+the target (green) and its geometric focus (magenta). Bottom, the same placement in
+three orthogonal slices through the target.}
+\label{fig:tool}
+\end{figure}
+
+\appendix
+\section{Installation}\label{sec:install}
+
+Two entry points need different things. If you already have a solved bundle you never
+touch a CT, a GPU, or MATLAB, so install the core and go straight to placement
+(Section~\ref{sec:steps}, step~5). If you are bringing your own CT you also need the
+solver extra and a GPU.
+
+\begin{lstlisting}[style=sh]
+pip install -e .                  # core: numpy, scipy (placement from an existing bundle)
+\end{lstlisting}
+
+\callout{Optional extras}{%
+\textbullet\ \textbf{\code{.[registration]}} (nibabel, tuba) reads NIfTI inputs and
+round-trips MNI / NRRD frames.\\
+\textbullet\ \textbf{\code{.[viz]}} (napari, matplotlib) drives the interactive
+positioning tool.\\
+\textbullet\ \textbf{\code{.[solver]}} (\code{fullwave2-ultra} plus a CUDA GPU) runs the
+outward solve. A 1\,MHz whole-skull run fills a 48\,GB GPU. Half-megahertz CTX-500 cases
+are an order of magnitude cheaper (Section~\ref{sec:grid}).}
+
+\newpage 
+\section{Related downstream tool (not in this repo)}\label{sec:related}
+
+\texttt{acoustoelastic\_ultrasound\_neurons} extends this \textbf{multiphysics simulation
+stack} (coupling \textbf{acoustic} propagation, radiation-force \textbf{shear}-wave
+strain, \textbf{thermal} bioheat, the strain-to-membrane-tension \textbf{acousto-electric}
+transduction, and \textbf{neuronal} firing models on one anatomical grid) all the way
+to per-voxel neural firing. It does not ship with \texttt{skull\_transparency} and is only
+a pointer to where this pipeline leads. The FUN~2026 conference abstract is reproduced
+verbatim below (its Fig.~1 is the composite shown in Figure~\ref{fig:adv_fun}).
+
+\textbf{Background:} Transcranial focused ultrasound (tFUS) is a non-invasive
+neuromodulation modality with millimetre resolution and access to deep brain structures,
+yet its biophysical mechanism remains unresolved. Exposure is conventionally specified by
+transducer surface or derated focal pressure, quantities only indirectly related to what
+ultimately matters for therapy, namely which neurons fire and through which pathway they
+are recruited. No published tool carries an exposure prescription through to a per-voxel
+statement of firing, so competing mechanistic hypotheses cannot be compared on a common
+field. We present an open-source, end-to-end framework that maps a transcranial acoustic
+field to per-voxel neural firing maps registered to anatomy, with six interchangeable
+mechanism modules evaluated on one shared multi-compartment Hodgkin--Huxley neuron.
+
+\textbf{Methods:} The pipeline (Fig.~1a) couples heterogeneous nonlinear full-wave
+acoustic propagation (Fullwave) through a micro-CT human-skull specimen, a
+radiation-force-driven viscoelastic shear-FDTD solve giving tissue displacement and
+strain, and a Pennes bioheat solve giving temperature rise. The mechanical pathway
+converts local tissue strain into an effective lipid-bilayer membrane tension,
+$T = K_A \cdot \alpha \cdot \varepsilon_\mathrm{eq}$, where $\varepsilon_\mathrm{eq}$ is
+the von Mises equivalent strain, $K_A$ is the bilayer area-expansion modulus, and
+$\alpha$ is a dimensionless multi-scale coupling factor relating far-field tissue strain
+to local membrane area change. This tension gates two-state Boltzmann mechanosensitive
+channels, a depolarising Piezo1 and a hyperpolarising TREK-1, on a dendrite-soma-AIS
+Hodgkin--Huxley neuron that also carries intramembrane-cavitation, Ca$^{2+}$/SK,
+thermosensitive (TRP), astrocytic (TRPA1 to glutamate to NMDA), and
+mechanosensitive-synaptic pathways. The product $K_A \cdot \alpha$ is the single
+operative calibration knob and is treated as a literature-bracketed modelling parameter.
+Every numerical parameter is classified by source and bracketed by a $\pm 25\%$
+sensitivity sweep. We demonstrate the framework on the Yaakub theta-burst protocol
+(500~kHz CTX-500 array, 20~ms bursts at 5~Hz, 10\% duty, 80~s session) delivered through
+the Halle micro-CT skull with the bowl auto-aimed at the left dorsal anterior cingulate
+cortex (dACC). The surface drive is calibrated to reproduce Yaakub's reported 0.5~MPa
+transcranial focal pressure.
+
+\textbf{Results:} At the calibrated exposure (focal PNP 0.50~MPa, MI 0.71,
+$I_\mathrm{SPPA}$ 8.1~W/cm$^2$, the acoustic metrics remaining within ITRUSST consensus
+safety envelopes), the focal membrane tension reaches about 6.5~mN/m, roughly 2.4 times
+the Piezo1 half-activation tension, and the strain-driven Piezo1/TREK-1 pathway alone
+produces firing at 5,468 brain voxels at up to 300~Hz. The resulting iso-25\% firing
+volume is 8,523~mm$^3$, substantially larger than the acoustic $-6$~dB focal volume
+(116~mm$^3$) and elongated along the beam axis by the focal aspect ratio (Fig.~1c). Focal
+heating is modest, with a focal $\Delta T$ of 233~mK and a skull-bone peak of 0.94~K. A
+real-field mechanism sweep (six strain levels by five scenarios) shows the dendrite-heavy
+three-compartment geometry is necessary for firing at the working point, where the
+single-compartment baseline stays subthreshold, while the
+Piezo1-inactivation/Ca$^{2+}$/SK pathway suppresses firing by about 30 to 33\% (up to
+about 58\% at saturation). Sensitivity analysis identifies the Piezo1 half-activation
+tension and the strain-to-tension product $K_A \cdot \alpha$ as the dominant
+uncertainties. End-to-end runtime is about 17~min per scenario on a single workstation
+for the fully volumetric, heterogeneous head model of roughly 28~million voxels over the
+130 by 80 by 80~mm volume. By linking acoustic exposure to cellular firing, the framework
+is released open-source as a starting point for discriminating tFUS mechanisms against
+experimental recordings.
+
+\begin{figure}[H]\centering
+\includegraphics[width=\linewidth]{figs/adv_fun_composite.png}
+\caption{The FUN~2026 abstract's composite Figure~1, the end-to-end prediction for the
+Yaakub theta-burst sonication through the Halle micro-CT skull, aimed at the left dACC.
+(a) Simulation pipeline, acoustic FDTD $\to$ radiation-force / shear-FDTD strain and
+absorption / Pennes thermal, converging on the multi-pathway Hodgkin--Huxley
+neuromodulation block. (b) Single-burst spike raster across 120 firing voxels sorted by
+depth, with co-registered ROI slices and a depth histogram. (c) Co-registered focal-plane
+slices for acoustic intensity, radiation-force displacement, temperature rise, and firing
+rate (skull outline in cyan). (d) Three-dimensional iso-surfaces of the per-voxel firing
+rate (50\% and 25\% of peak) within the skull. Predicted 5,468 firing voxels, iso-25\%
+firing volume 8,523~mm$^3$, focal $\Delta T$ 233~mK.}
+\label{fig:adv_fun}
+\end{figure}
+
+\vspace{2mm}\hrule\vspace{1mm}
+{\small All numeric values above are taken from the whole-skull simulation metadata
+(\code{halle_hemis_tr_6ppw/meta.json}, cross-checked against the \code{halle_c_graded.f32}
+byte size) and the package source.}
+
+\end{document}
