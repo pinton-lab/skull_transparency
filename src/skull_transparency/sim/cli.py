@@ -19,7 +19,9 @@ import argparse
 import os
 import sys
 
-DEFAULT_SIM = "/celerina/gfp/mfs/hemisphere_tr/sim"
+from .. import paths
+
+DEFAULT_SIM = str(paths.sim_dir())   # FULLWAVE2_SIM_DIR, else SKULL_TR_DATA_ROOT/sim
 
 
 def _parse_vox(s):
@@ -32,8 +34,8 @@ def main(argv=None):
                                 description="Pure-Python fullwave2 TR launchers")
     p.add_argument("which", help="launcher name (e.g. outward, inward_windowed, "
                    "skullonly, subset_focalbox, verify)")
-    p.add_argument("--sim", default=os.environ.get("FULLWAVE2_SIM_DIR", DEFAULT_SIM),
-                   help="source sim tree (read-only)")
+    p.add_argument("--sim", default=DEFAULT_SIM,
+                   help="source sim tree (read-only); defaults via $FULLWAVE2_SIM_DIR / $SKULL_TR_DATA_ROOT")
     p.add_argument("--out", default=os.getcwd(), help="output root")
     p.add_argument("--margin", type=int, default=16)
     p.add_argument("--mode", default="tr", choices=["tr", "geo", "flat"],

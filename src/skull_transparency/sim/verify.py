@@ -13,6 +13,8 @@ import json
 import os
 import numpy as np
 
+from .. import paths
+
 from . import launchers as L
 
 # committed dirs we can verify, with how to (re)generate them.
@@ -180,7 +182,7 @@ def verify_dirs(sim_dir, out_root, dirs=None, full=False):
 
 if __name__ == "__main__":
     import sys
-    sim = os.environ.get("FULLWAVE2_SIM_DIR", "/celerina/gfp/mfs/hemisphere_tr/sim")
+    sim = str(paths.sim_dir())
     out = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
     dirs = sys.argv[2:] or None
     raise SystemExit(verify_dirs(sim, out, dirs))

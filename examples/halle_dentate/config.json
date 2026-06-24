@@ -1,8 +1,8 @@
 {
  "bundle": {
-  "data_dir": "/celerina/gfp/mfs/hemisphere_tr/data/halle_hemis_ppw55",
-  "meta": "/celerina/gfp/mfs/hemisphere_tr/sim/meta.json",
-  "transform": "/celerina/gfp/mfs/hemisphere_tr/sim/ppw55_transform.npz",
+  "data_dir": "${SKULL_TR_DATA_ROOT}/data/halle_hemis_ppw55",
+  "meta": "${SKULL_TR_DATA_ROOT}/sim/meta.json",
+  "transform": "${SKULL_TR_DATA_ROOT}/sim/ppw55_transform.npz",
   "target_name": "dentate_left"
  },
  "bowl": {

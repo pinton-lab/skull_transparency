@@ -36,13 +36,15 @@ python examples/halle_dentate/run_pipeline.py examples/halle_dentate/config.json
 # -> writes surface_map.npz + placement.json into the bundle data_dir
 ```
 
-`config.json` points at the external, read-only inputs:
+`config.json` points at the external, read-only inputs via the
+`${SKULL_TR_DATA_ROOT}` placeholder (default `/celerina/gfp/mfs/hemisphere_tr`).
+To relocate, `export SKULL_TR_DATA_ROOT=/your/path` or edit `config.json`:
 
 | input | path |
 |---|---|
-| Field Bundle data | `/celerina/gfp/mfs/hemisphere_tr/data/halle_hemis_ppw55` |
-| grid/physics meta | `/celerina/gfp/mfs/hemisphere_tr/sim/meta.json` |
-| sim↔MNI transform | `/celerina/gfp/mfs/hemisphere_tr/sim/ppw55_transform.npz` |
+| Field Bundle data | `$SKULL_TR_DATA_ROOT/data/halle_hemis_ppw55` |
+| grid/physics meta | `$SKULL_TR_DATA_ROOT/sim/meta.json` |
+| sim↔MNI transform | `$SKULL_TR_DATA_ROOT/sim/ppw55_transform.npz` |
 
 The finalized figures/numbers live under **`runs/rebuild_6ppw_graded/`** (the graded
 6-ppw rebuild; `runs/rebuild_6ppw_20260616/` is the prior pass). The headline
@@ -55,13 +57,13 @@ The outward/inward time-reversal solver **inputs** are regenerated bit-for-bit b
 pure-Python launchers; the solve itself uses the external CUDA binary.
 
 ```bash
-python -m skull_transparency.sim outward          --sim /celerina/gfp/mfs/hemisphere_tr/sim --out /scratch/run
-python -m skull_transparency.sim inward_windowed  --sim /celerina/gfp/mfs/hemisphere_tr/sim --out /scratch/run
+python -m skull_transparency.sim outward          --out /scratch/run   # --sim defaults to $SKULL_TR_DATA_ROOT/sim
+python -m skull_transparency.sim inward_windowed  --out /scratch/run   # (or pass --sim / set $FULLWAVE2_SIM_DIR)
 # add --run to invoke the solver (needs a GPU + the binary below)
 ```
 
-External CUDA solver: the fullwave2-ultra `bench_3d_opt` (public repo,
-`/celerina/gfp/mfs/fullwave2-ultra/bin/bench_3d_opt`, PolyForm Noncommercial). `bench_3d_opt` is
+External CUDA solver: the fullwave2-ultra `bench_3d_opt` (public repo, the sibling
+`fullwave2-ultra/bin/bench_3d_opt` checkout, PolyForm Noncommercial). `bench_3d_opt` is
 deterministic and reproduced the retired `fullwave2_3d_Aexp_genout_cuda_aperturegrowth_opt`
 bit-for-bit on the dentmanual *targeting* run (prior work); a generic small-grid re-check (2026-06-22)
 diverged 17-43% in PML-dominated regimes, so real-grid parity for the *transparency/volume* path is

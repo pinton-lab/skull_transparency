@@ -6,20 +6,32 @@ place a focused bowl for the target. Writes surface_map.npz + placement.json.
     python run_pipeline.py [config.json]
 """
 import json
+import os
 import sys
 from pathlib import Path
 
 import skull_transparency as st
+from skull_transparency import paths
+
+
+def _expand(p):
+    """Expand ``$VARS`` and ``~`` in a config path (e.g. ``${SKULL_TR_DATA_ROOT}``)."""
+    return os.path.expanduser(os.path.expandvars(p)) if p else p
 
 
 def main(cfg_path="config.json"):
+    # Default the data root so the shipped ${SKULL_TR_DATA_ROOT} placeholders resolve
+    # to the original layout unless the user overrides them.
+    os.environ.setdefault("SKULL_TR_DATA_ROOT", paths.DEFAULT_DATA_ROOT)
     cfg = json.loads(Path(cfg_path).read_text())
     b = cfg["bundle"]
-    data_dir = Path(b["data_dir"])
+    data_dir = Path(_expand(b["data_dir"]))
+    meta = _expand(b["meta"])
+    transform = _expand(b.get("transform"))
 
     # 1. Field Bundle (idempotent: writes bundle.json + registration.json if absent)
     if not (data_dir / "bundle.json").exists():
-        st.build_field_bundle(data_dir, b["meta"], b.get("transform"), target_name=b.get("target_name"))
+        st.build_field_bundle(data_dir, meta, transform, target_name=b.get("target_name"))
     bundle = st.load_bundle(data_dir)
 
     # 2. transparency map (-> small distributable surface_map.npz)

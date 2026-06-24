@@ -8,9 +8,10 @@ import os
 import numpy as np
 import pytest
 
+from skull_transparency import paths
 from skull_transparency.sim import fwio, forcoef, mlcompat, _common as C
 
-SIM_DIR = os.environ.get("FULLWAVE2_SIM_DIR", "/celerina/gfp/mfs/hemisphere_tr/sim")
+SIM_DIR = str(paths.sim_dir())
 HAVE_SIM = os.path.isdir(SIM_DIR) and os.path.exists(os.path.join(SIM_DIR, "meta.json"))
 needs_sim = pytest.mark.skipif(not HAVE_SIM, reason="legacy sim tree not present")
 

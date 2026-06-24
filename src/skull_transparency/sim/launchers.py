@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from pathlib import Path
 import numpy as np
 
 from . import fwio, _common as C
@@ -25,7 +26,10 @@ from .mlcompat import (matlab_round, transmit_pulse, unit_pulse, tukeywin,
 BINARY = "bench_3d_opt"   # fullwave2-ultra CUDA solver (PUBLIC repo build); genout byte-parity with
 #                           the retired fullwave2_3d_Aexp_genout_cuda_aperturegrowth_opt was verified
 #                           on dentmanual outward (the 2026-06-19 public build) — re-confirm if rebuilt.
-_DEFAULT_BIN_DIR = "/celerina/gfp/mfs/fullwave2-ultra/bin"   # public repo's solver bin (fallback)
+# Last-resort solver bin location: the sibling fullwave2-ultra checkout
+# (see pyproject [tool.uv.sources]). Override with $FULLWAVE2_BIN_DIR (or
+# $FULLWAVE2_BIN for an explicit binary); preferred path is the package resolver.
+_DEFAULT_BIN_DIR = str(Path(__file__).resolve().parents[3].parent / "fullwave2-ultra" / "bin")
 
 
 # ---- small shared utilities -------------------------------------------------

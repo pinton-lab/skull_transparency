@@ -2,8 +2,8 @@
 """Generate the schematic figures for the CT-import / grid tutorial.
 
 Verified constants of the manuscript whole-skull simulation
-(/celerina/gfp/mfs/fullwave2_transcranial_aperturegrowth/halle_hemis_tr_6ppw/meta.json,
-cross-checked vs halle_c_graded.f32 = 652*814*650*4 bytes):
+(from the graded 6-ppw run's meta.json, cross-checked vs
+halle_c_graded.f32 = 652*814*650*4 bytes):
   N=[652,814,650] voxels, dX=0.25 mm, F0=1 MHz, c0=1540 m/s, ppw=6.16, graded
   medium, R_world->grid = diag(-1,1,1) (axis-aligned: i=Left,j=Anterior,k=Superior),
   target dentate MNI(-12,-57,-34) <-> voxel(372.65,324.71,140.59).

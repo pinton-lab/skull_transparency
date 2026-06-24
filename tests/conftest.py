@@ -3,12 +3,13 @@ from pathlib import Path
 
 import pytest
 
+from skull_transparency import paths
+
 # Integration tests run against the existing Halle/dentate bundle if present.
-DATA = Path(os.environ.get(
-    "SKULL_TR_TEST_BUNDLE",
-    "/celerina/gfp/mfs/hemisphere_tr/data/halle_hemis_ppw55",
-))
-SIM = Path("/celerina/gfp/mfs/hemisphere_tr/sim")
+# Locations come from skull_transparency.paths (override via $SKULL_TR_DATA_ROOT);
+# $SKULL_TR_TEST_BUNDLE still pins just the bundle dir.
+DATA = Path(os.environ.get("SKULL_TR_TEST_BUNDLE", str(paths.bundle_dir())))
+SIM = paths.sim_dir()
 
 
 @pytest.fixture(scope="session")

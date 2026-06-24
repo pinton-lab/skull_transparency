@@ -21,8 +21,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 import skull_transparency as st
+from skull_transparency import paths
 
-DATA = "/celerina/gfp/mfs/hemisphere_tr/data/halle_hemis_ppw55"
+DATA = str(paths.bundle_dir())   # override via $SKULL_TR_DATA_ROOT
 FIG = Path(__file__).resolve().parent / "array_placement_preview.png"   # NOT the manuscript figure
 N, SP, TH, RWIN = 64, 5.0, 35.0, 45.0   # elements, spacing(mm), incid cap(deg), window radius(mm)
 

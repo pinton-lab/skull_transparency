@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 import skull_transparency as st
+from skull_transparency import paths
 from skull_transparency.complex_field import ComplexField, ballistic_window_global
 
 
@@ -161,7 +162,7 @@ def test_ballistic_window_shape():
 
 # ---- integration (needs the Halle bundle + array_traces.npz) ----
 def _val(name):
-    p = Path("/celerina/gfp/mfs/hemisphere_tr/analysis/placement_validation") / name
+    p = paths.analysis_dir() / "placement_validation" / name
     if not p.exists():
         pytest.skip(f"{name} not available")
     return p

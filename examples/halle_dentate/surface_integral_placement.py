@@ -7,8 +7,9 @@ radial projection to a transducer sphere, and the angular-spectrum focal-spot pr
 Run with PYTHONPATH=../../src."""
 import numpy as np
 import skull_transparency as st
+from skull_transparency import paths
 
-BUNDLE = "/celerina/gfp/mfs/hemisphere_tr/data/halle_hemis_ppw55"
+BUNDLE = str(paths.bundle_dir())   # override via $SKULL_TR_DATA_ROOT
 
 
 def main():
