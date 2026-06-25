@@ -46,10 +46,17 @@ def _read_genout_mod(path, nXe, mod):
         return np.fromfile(str(path), dtype="<f4").reshape(-1, n2, n2, n2)
 
 
-def extract_bundle(run_dir, out_dir, sim_dir, *, n_out=None, mod: int = MOD) -> Path:
+def extract_bundle(run_dir, out_dir, sim_dir, *, n_out=None, mod: int = MOD,
+                   bone_threshold: float = 2200.0, c_bone: float = 2900.0) -> Path:
     """Build a Field Bundle in ``out_dir`` from the solved outward ``run_dir``
     (which holds ``genout_mod.dat``) and the producer ``sim_dir`` (``meta.json`` +
-    ``c.f32`` + ``registration.json``). ``n_out`` defaults to all recorded frames."""
+    ``c.f32`` + ``registration.json``). ``n_out`` defaults to all recorded frames.
+
+    ``bone_threshold`` / ``c_bone`` (m/s) are recorded in ``bundle.json`` ``physics`` so
+    the calvarial-surface cutoff travels with the bundle: the human default is 2200/2900,
+    but a medium whose bone is slower (thin bone well below 2200 m/s) must pass its own
+    value so ``transparency`` finds the right surface. The producer's own ``bone_threshold``
+    is the natural value to pass here."""
     run_dir, out_dir, sim_dir = Path(run_dir), Path(out_dir), Path(sim_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     meta = C.load_meta(sim_dir)
@@ -96,7 +103,7 @@ def extract_bundle(run_dir, out_dir, sim_dir, *, n_out=None, mod: int = MOD) -> 
         "grid": {"N": N, "dx_m": float(meta["dX_m"]), "order": "C",
                  "field_mod": mod, "n_field": nf},
         "physics": {"c0": float(meta.get("C0", 1540.0)), "f0": float(meta.get("F0", 1e6)),
-                    "rho0": 1000.0, "c_bone": 2900.0, "bone_threshold": 2200.0,
+                    "rho0": 1000.0, "c_bone": float(c_bone), "bone_threshold": float(bone_threshold),
                     "ppw": meta.get("ppw")},
         "target": {"name": meta.get("subject_id", "target") + "_target",
                    "mni_ras_mm": target_mni, "fullres_voxel": target_fullres.tolist(),

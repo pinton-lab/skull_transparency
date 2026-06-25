@@ -20,10 +20,11 @@ dependencies = ["numpy>=1.24", "scipy>=1.10"]
 
 [project.optional-dependencies]
 registration = ["nibabel>=5.0", "tuba"]                  # MNI<->subject via tuba; NRRD frame for Halle bundles, MNI fallback otherwise
-analysis = ["scikit-image>=0.21"]                        # surface meshing for viz/QC
 viz = ["matplotlib>=3.7", "napari", "imageio-ffmpeg"]    # surface render / movie
 dev = ["pytest>=7.4"]
 solver = ["fullwave2-ultra"]   # GPU preflight + binary resolution for run_solver=True (bench_3d_opt)
+# NB: `tuba` and `fullwave2-ultra` are NOT on PyPI — they resolve from the sibling
+# checkouts via [tool.uv.sources] below (use `uv`, or `pip install -e ../tuba` first).
 # The CUDA solver EXECUTABLE (fullwave2-ultra `bench_3d_opt`) is distributed separately
 # (PolyForm Noncommercial); point FULLWAVE2_BIN at it, or install the [solver] extra to
 # resolve/preflight it. See src/skull_transparency/sim/.

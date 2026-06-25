@@ -109,3 +109,43 @@ Each guard keys off a field **absent** from Halle's `meta.json` / call sites, so
 legacy run takes the identical code path. Verified: §4 light run passes (committed
 `.dat` refs + `_porosity_aexp` `tobytes()` equality). Re-run §4 (and the opt-in full
 regen) after any further change here before relying on a result.
+
+## Brain-center whole-skull transparency baseline (added)
+
+A neutral whole-skull transparency variant: one omnidirectional source at the **brain
+center** → `1/r²`-corrected map of where the skull transmits. Code is additive —
+`src/skull_transparency/brain_center.py` (atlas/cavity/image-only centers),
+`sim/prepare.build_brain_center_run` + `_choose_pose_centered`, `render.py`, the
+`prepare --center [--center-mm] [--bone-threshold]` / `extract --bone-threshold` /
+`transparency [--bone-threshold]` CLI subcommands (`tests/test_brain_center.py`; tutorial §5).
+
+**Generic (portable, in-repo) path — any subject, no lab data:**
+
+```bash
+skull-transparency prepare --c-map c.nii.gz --center --transducer ctx500.json --out run/
+python -m skull_transparency.sim outward --sim run --out run --run        # GPU solve
+skull-transparency extract     --run run/outward --sim run --out run/bundle
+skull-transparency transparency --bundle run/bundle --out transparency.png
+```
+
+**Exact Halle reference figure** — uses the atlas brain CoM (MNI152 brain-mask centroid
+`(0,-22,9.5)` → crop voxel `[191,304,372]`) on the same `[409,539,529]` 0.28 mm whole-skull
+grid as `data/halle_skullonly`, via the lab build script (sibling of `bridge_skullonly.py`,
+under `$SKULL_TR_DATA_ROOT/analysis/`, default `/celerina/gfp/mfs/hemisphere_tr/analysis`):
+
+```bash
+# solve (needs a free GPU) + bridge to $SKULL_TR_DATA_ROOT/data/halle_braincenter:
+SCRATCH=/tmp/braincenter_run GPU=0 python "$SKULL_TR_DATA_ROOT/analysis/build_braincenter.py" solve   # ~4 min, ~35 GB scratch
+SCRATCH=/tmp/braincenter_run            python "$SKULL_TR_DATA_ROOT/analysis/build_braincenter.py" bridge
+# render the tutorial figure from the bundle (regenerates tutorial/figs/fig_braincenter.png):
+cd tutorial && python -c "import figs; figs.fig_braincenter()"
+```
+
+> Note (corrects the deprecated `launch_skullonly` "center"): its `CEN=[360,360,360]`
+> buffer-center seated the source at the **dentate**, 57 mm off the brain center. The
+> baseline above uses the atlas CoM. The whole-skull figure plots transmitted **amplitude
+> in dB** (`log |p|`), not linear intensity.
+>
+> For a **non-human** subject the same generic `prepare --center` path applies; set
+> `--bone-threshold` to that skull's bone sound speed and, if the image-only centroid is
+> off, `--center-mm x,y,z`.

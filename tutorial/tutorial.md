@@ -4,7 +4,7 @@
 
 ## What the tool does
 
-Given a subject's skull and a deep brain target, the tool finds **where to place a focused-ultrasound transducer, and at what pose**, to couple acoustic energy through the skull onto that target. It works by *acoustic reciprocity*: rather than search transducer positions by trial, it places a virtual point source *at the target* and runs one full-wave solve so the wave propagates **outward** through the skull, recording where it emerges on the outer skull surface and with what phase. Bright, in-phase surface patches are exactly the good acoustic windows; re-emitting that recording **time-reversed** converges back onto the target (Figure 1). The tool then searches that recorded surface for the best window and reports a concrete transducer placement plus a coupling score.
+Given a subject's skull and a deep brain target, the tool finds **where to place a focused-ultrasound transducer, and at what pose**, to couple acoustic energy through the skull onto that target. It works by *acoustic reciprocity*: rather than search transducer positions by trial, it places a virtual point source *at the target* and runs one full-wave solve so the wave propagates **outward** through the skull, recording where it emerges on the outer skull surface and with what phase. Bright, in-phase surface patches are exactly the good acoustic windows; re-emitting that recording **time-reversed** converges back onto the target (Figure 1). The tool then searches that recorded surface for the best window and reports a concrete transducer placement plus a coupling score. The very same outward recording, taken from a source at the *center of the brain* rather than a target, instead gives a neutral **whole-skull** transparency map -- where the skull transmits, independent of any one target (Section 5).
 
 ![Figure 1](../manuscript/figs/movie_frames/frame-67.png)
 
@@ -86,13 +86,35 @@ A target is just a **point in world millimetres** plus an **approach direction**
 
 The single most common import bug is a flipped target, a sign error in the affine mirrors the skull, so a left-side target lands on the right. Always confirm `dent_grid` sits where you expect (seated in from the approach face, correct laterality) before trusting a result, because nothing throws, it just gives a quietly wrong answer.
 
+## The brain-center whole-skull transparency baseline
+
+Targeting a deep point answers *where to place the transducer for that target*. A complementary question is *how transparent is the skull everywhere*, independent of any one target. The tool answers it with a **brain-center** run: a single virtual point source at the center of the brain radiates **omnidirectionally**, so one outward solve illuminates the whole calvaria at near-normal incidence, and the $1/r^2$ distance correction (Section 8) cancels the residual geometric spreading. What remains is a map of bone *transmission* that is not biased toward any window or target (Figure 5) -- a neutral whole-skull baseline.
+
+It runs through the same pipeline, with no target and no approach (the wave goes every way, so the unimplemented `approach='auto'` never arises):
+
+```bash
+skull-transparency prepare --c-map c.nii.gz --center --transducer ctx500.json --out run/
+#  ... outward GPU solve + extract (Section 7) ...
+skull-transparency transparency --bundle run/bundle --out transparency.png
+```
+
+`--center` sizes a cube around the whole head and seats the source at the brain center: the **atlas center of mass** when the medium is in (or registered to) MNI -- the canonical ICBM152 brain-mask centroid, MNI $(0,-22,9.5)$ mm, mapped in through the affine -- otherwise the **intracranial-cavity centroid** read straight from the speed map (`brain_center.py`; the image-only centroid is exact for an intact CT but only $\sim$2 cm accurate on a *dry* specimen skull whose vault is open, so prefer the atlas path when a registration exists). The `transparency` subcommand then computes the $1/r^2$-corrected map (`compute_transparency_map`, distance correction on by default) and renders it as transmitted amplitude in decibels (`render_transparency_surface`, the log-$|p|$ convention).
+
+![Figure 5](figs/fig_braincenter.png)
+
+**Figure 5.** Whole-skull transparency for the reference Halle skull from a brain-center run ($694{,}363$ surface patches, three anatomical projections; bright $=$ acoustically transparent bone). Colour is the $1/r^2$-corrected transmitted *amplitude* in decibels relative to the $98$th-percentile window -- the whole-skull convention is log $|p|$, since linear intensity ($p^2$) has too wide a dynamic range and crushes most of the skull to black. One omnidirectional source sits at the atlas brain center of mass (cyan $+$, MNI $(0,-22,9)$; the field peaks $0.3$ mm from it), $29$--$111$ mm from the bone. The thin temporal squama reads transparent; the orbits read dark (openings, where intracranial air maps to water, Section 10). This generalises the deprecated whole-skull "center" launcher, whose source in fact sat at the dentate, $57$ mm off the brain center.
+
+> **A baseline, not a placement objective**
+>
+> - The brain-center map is for *seeing* where the skull transmits; the $1/r^2$ correction over-rewards far, thin-bone windows, so it is the wrong quantity to seat a transducer with. For an actual placement use a targeted run and `place`, which weights incidence ($\cos^2\theta$) and hard-rejects sub-critical patches (Section 8).
+
 ## The medium maps for speed, density, and attenuation
 
-The medium is three co-registered volumes (sound speed $c$, density $\rho$, absorption $\alpha$) plus a scalar nonlinearity $\beta$ (default 5.5); the solver forms only the bulk modulus $K=c^2\rho$ internally. **By default the maps and $\beta$ are user-defined** (Figure 5): you supply them with whatever HU$\to$property models you trust, since the right mapping depends on the scanner. The reference subject maps Hounsfield units to a piecewise-linear speed ($1540\to2900$ m/s) and density ($1000\to2200$ kg/m$^3$) and a CT-porosity absorption ($0.4$ dB MHz$^{-1}$ cm$^{-1}$ in soft tissue/water, rising in bone). When you supply only a speed map, `prepare` fills the rest. $\beta$ defaults to 5.5 (`meta.json` key `beta`), `--alpha-map` overrides the porosity model, `--rho-map` overrides the synthesized density, and otherwise $\rho$ comes from the ramp $\rho(c)=1000+\mathrm{clip}((c-1540)/1360,0,1)\cdot1200$. At the linear $1$ Pa drive used for the reference results $\beta$ has no effect; it is carried in the medium only for finite-amplitude runs.
+The medium is three co-registered volumes (sound speed $c$, density $\rho$, absorption $\alpha$) plus a scalar nonlinearity $\beta$ (default 5.5); the solver forms only the bulk modulus $K=c^2\rho$ internally. **By default the maps and $\beta$ are user-defined** (Figure 6): you supply them with whatever HU$\to$property models you trust, since the right mapping depends on the scanner. The reference subject maps Hounsfield units to a piecewise-linear speed ($1540\to2900$ m/s) and density ($1000\to2200$ kg/m$^3$) and a CT-porosity absorption ($0.4$ dB MHz$^{-1}$ cm$^{-1}$ in soft tissue/water, rising in bone). When you supply only a speed map, `prepare` fills the rest. $\beta$ defaults to 5.5 (`meta.json` key `beta`), `--alpha-map` overrides the porosity model, `--rho-map` overrides the synthesized density, and otherwise $\rho$ comes from the ramp $\rho(c)=1000+\mathrm{clip}((c-1540)/1360,0,1)\cdot1200$. At the linear $1$ Pa drive used for the reference results $\beta$ has no effect; it is carried in the medium only for finite-amplitude runs.
 
-![Figure 5](figs/fig5_medium.png)
+![Figure 6](figs/fig5_medium.png)
 
-**Figure 5.** The medium is three user-defined maps ($c$, $\rho$, $\alpha$) plus a scalar nonlinearity $\beta$ (default 5.5); the solver forms only $K=c^2\rho$. If only a speed map is available, $\rho$ can be synthesized from $c$ (right).
+**Figure 6.** The medium is three user-defined maps ($c$, $\rho$, $\alpha$) plus a scalar nonlinearity $\beta$ (default 5.5); the solver forms only $K=c^2\rho$. If only a speed map is available, $\rho$ can be synthesized from $c$ (right).
 
 ## Importing your own CT, step by step
 
@@ -106,7 +128,7 @@ The one irreducibly-yours piece is the HU$\to$sound-speed model; everything down
         --approach 0,0,1 --transducer ctx500.json --out run/
     ```
 
-4. **Run the outward full-wave solve (GPU).** The Fullwave2 / `fullwave2-ultra` step; install the `.[solver]` extra and point `FULLWAVE2_BIN` at the binary. Section 7 covers the two-phase solve and how the acoustic field is computed from it.
+4. **Run the outward full-wave solve (GPU).** The Fullwave2 / `fullwave2-ultra` step; install the `.[solver]` extra and point `FULLWAVE2_BIN` at the binary. Section 8 covers the two-phase solve and how the acoustic field is computed from it.
 5. **Extract and place (pure Python).**
     ```python
     import skull_transparency as st
@@ -117,9 +139,11 @@ The one irreducibly-yours piece is the HU$\to$sound-speed model; everything down
 
 For a `.npy` c-map add `--affine A.npy`. `prepare` resamples to $\delta$, poses the grid, and writes `c.f32`, `meta.json`, `array_coords.i32` and a rigid `registration.json`. From the console, run `skull-transparency extract ...` then `skull-transparency place --bundle run/bundle --out result/`, which calls `place_bowl` exactly as above. (The manuscript's pose-optimised CTX-500 cap method is `place_cap_optimal`, which instead takes a `CapField` plus seed az/el angles.)
 
+For a target-free **whole-skull** baseline, swap steps 3 and 5: `prepare --center` (no `--target`/`--approach`) seats the source at the brain center, and after the same solve+extract, `skull-transparency transparency --bundle run/bundle --out map.png` renders the $1/r^2$-corrected map (Section 5).
+
 ## Running the time-reversal simulation and computing the field
 
-The solve has **two phases** (Figure 1 animates both). The **outward** phase places a virtual point source at the target and propagates it out through the skull, recording in one pass the field on the entire bone surface, a decimated interior volume, and the per-element array signals. The **inward** phase time-reverses that array recording and re-emits it, so the wave converges back and refocuses at the target, recording the focal field (Figure 6).
+The solve has **two phases** (Figure 1 animates both). The **outward** phase places a virtual point source at the target and propagates it out through the skull, recording in one pass the field on the entire bone surface, a decimated interior volume, and the per-element array signals. The **inward** phase time-reverses that array recording and re-emits it, so the wave converges back and refocuses at the target, recording the focal field (Figure 7).
 
 ### Running the solve
 
@@ -142,11 +166,11 @@ python -m skull_transparency.sim subset_focalbox --mode flat --selfile sel.i32 -
 
 ### Computing the field
 
-From the outward record, `integrate_outward` forms, per grid voxel, the time-integrated intensity $\mathcal{I}=\sum_t p^2(t)$ (deposited energy) and the peak pressure $p_{\max}=\max_t\lvert p(t)\rvert$, which is dominated by the clean direct arrival. Sampling $p_{\max}$ just outside the bone surface within the direct-arrival (ballistic) window $t\le 1.12\,\lvert\mathbf{x}-\mathbf{x}_t\rvert/c_0$, the *raw* peak intensity $I=p_{\max}^2/(2\rho c)$ (geometric spreading included, so it is dominated by proximity to the target) is the coupling (transparency) map the placement search reads. The optional $1/r^2$ distance-corrected map is for *visualizing* bone transmission only; using it for placement over-rewards far, thin-bone windows. That search weights each patch by incidence ($\cos^2\theta$ on the true surface normal) and hard-rejects patches beyond $30^\circ$ (the water-to-bone longitudinal critical angle, past which the fluid solver's longitudinal transmission gives way to unmodeled shear conversion); the resulting incidence-weighted objective $\sqrt{J_w}$ is what the placement step and the interactive positioning tool maximize. The per-element aberration delays that steer the inward re-emission come from the array-element traces (each element's direct-arrival time), not from this surface map. From the inward record, the converged field gives the focal spot and the on-target peak relative to the 1 Pa per-element drive. For the reference dentate the dense $120^\circ$ occipital array (the validation aperture of Figure 6) refocuses as a near-wavelength spot ($-6$ dB FWHM $1.25\times2.5\times2.25$ mm) at $20.7\times$ the per-element drive. A single buildable bowl is weaker: the 64 mm transducer the placement step seats refocuses on the dentate at $7.9\times$, and the same procedure reaches $15.2\times$ at the thalamus and $11.4\times$ at the dACC through their own windows.
+From the outward record, `integrate_outward` forms, per grid voxel, the time-integrated intensity $\mathcal{I}=\sum_t p^2(t)$ (deposited energy) and the peak pressure $p_{\max}=\max_t\lvert p(t)\rvert$, which is dominated by the clean direct arrival. Sampling $p_{\max}$ just outside the bone surface within the direct-arrival (ballistic) window $t\le 1.12\,\lvert\mathbf{x}-\mathbf{x}_t\rvert/c_0$, the *raw* peak intensity $I=p_{\max}^2/(2\rho c)$ (geometric spreading included, so it is dominated by proximity to the target) is the coupling (transparency) map the placement search reads. The optional $1/r^2$ distance-corrected map is for *visualizing* bone transmission only; using it for placement over-rewards far, thin-bone windows -- it is exactly the neutral whole-skull baseline of Section 5 (rendered there as transmitted amplitude in dB). That search weights each patch by incidence ($\cos^2\theta$ on the true surface normal) and hard-rejects patches beyond $30^\circ$ (the water-to-bone longitudinal critical angle, past which the fluid solver's longitudinal transmission gives way to unmodeled shear conversion); the resulting incidence-weighted objective $\sqrt{J_w}$ is what the placement step and the interactive positioning tool maximize. The per-element aberration delays that steer the inward re-emission come from the array-element traces (each element's direct-arrival time), not from this surface map. From the inward record, the converged field gives the focal spot and the on-target peak relative to the 1 Pa per-element drive. For the reference dentate the dense $120^\circ$ occipital array (the validation aperture of Figure 7) refocuses as a near-wavelength spot ($-6$ dB FWHM $1.25\times2.5\times2.25$ mm) at $20.7\times$ the per-element drive. A single buildable bowl is weaker: the 64 mm transducer the placement step seats refocuses on the dentate at $7.9\times$, and the same procedure reaches $15.2\times$ at the thalamus and $11.4\times$ at the dACC through their own windows.
 
-![Figure 6](../manuscript/figs/focus_energy_qc.png)
+![Figure 7](../manuscript/figs/focus_energy_qc.png)
 
-**Figure 6.** The transcranial focal spot at the dentate, computed from the inward re-emission at 1 Pa per-element drive (three orthogonal slices through the focal peak, dB relative to peak; white contour $=-6$ dB / FWHM). This is the field the inward phase produces; the outward phase produces the surface coupling map that chose the window.
+**Figure 7.** The transcranial focal spot at the dentate, computed from the inward re-emission at 1 Pa per-element drive (three orthogonal slices through the focal peak, dB relative to peak; white contour $=-6$ dB / FWHM). This is the field the inward phase produces; the outward phase produces the surface coupling map that chose the window.
 
 ### Scaling intensity to a neuromodulation insonication
 
@@ -176,7 +200,7 @@ If `prepare` raises, it is usually a units problem. *"no outer skull surface fou
 
 - **Intracranial air is mapped to water.** Sinuses and mastoid air-cells read as water, so any window whose beam crosses them is not yet trustworthy. This is the most important caveat for real clinical CTs; deep solid-bone targets such as the dentate are unaffected.
 - **The placement score overstates focusing gain.** The single-frequency surface integral $\sqrt{J}=\sqrt{\int_S|G|^2\,dS}$ is correct for *choosing* a window but overstates the broadband time-reversal gain and depth of field; quote those from the inward re-simulation.
-- **`approach='auto'` is not implemented.** Pass an explicit `--approach` unit vector (target $\to$ skin).
+- **`approach='auto'` is not implemented.** Pass an explicit `--approach` unit vector (target $\to$ skin), or use the brain-center mode (`--center`, Section 5), whose omnidirectional source needs no approach.
 - **`prepare` sizes a cube.** It uses an $N^3$ grid from the bowl reach plus a margin rather than tightening to the head bounding box, which is correct but spends more voxels than the hand-cropped reference run.
 
 ## The interactive positioning tool
@@ -187,15 +211,15 @@ For a manual look, the console renders a placement preview (add `--interactive` 
 skull-transparency position --bundle run/bundle --out preview.png
 ```
 
-A richer manual tool (Appendix A of the PMB manuscript, `runs/rebuild_6ppw_graded/ctx500_position_tool.py`) renders the skull coloured by the placement objective $\sqrt{J_w}$ with a translucent CTX-500 cap and three orthogonal slices, with a live score as a percentage of the global peak (Figure 7). Keys are arrows = azimuth/elevation, `.`/`,` = radius, `t`/`g` and `y`/`h` = tilt/yaw, `1`/`2`/`3` = dentate / thalamus / dACC, `e` = export, `r` = reset. After a one-time `--build-cache` the caches make every later launch start with no large read.
+A richer manual tool (Appendix A of the PMB manuscript, `runs/rebuild_6ppw_graded/ctx500_position_tool.py`) renders the skull coloured by the placement objective $\sqrt{J_w}$ with a translucent CTX-500 cap and three orthogonal slices, with a live score as a percentage of the global peak (Figure 8). Keys are arrows = azimuth/elevation, `.`/`,` = radius, `t`/`g` and `y`/`h` = tilt/yaw, `1`/`2`/`3` = dentate / thalamus / dACC, `e` = export, `r` = reset. After a one-time `--build-cache` the caches make every later launch start with no large read.
 
-![Figure 7](../manuscript/figs/positioning_tool.png)
+![Figure 8](../manuscript/figs/positioning_tool.png)
 
-**Figure 7.** The interactive positioning tool, shown for the dentate. Centre, the skull surface coloured by the placement objective $\sqrt{J_w}$ (dark to bright = low to high single-element coupling) with a translucent 64 mm bowl (cyan) on the occipital window, the target (green) and its geometric focus (magenta). Bottom, the same placement in three orthogonal slices through the target.
+**Figure 8.** The interactive positioning tool, shown for the dentate. Centre, the skull surface coloured by the placement objective $\sqrt{J_w}$ (dark to bright = low to high single-element coupling) with a translucent 64 mm bowl (cyan) on the occipital window, the target (green) and its geometric focus (magenta). Bottom, the same placement in three orthogonal slices through the target.
 
 ## Installation
 
-The package is built in **two layers**, and most users only need the first. The **consumer** layer (placement from an already-solved bundle) is pure Python and needs no GPU and no external solver, so if you have a bundle you install the core and go straight to placement (Section 6, step 5). The **producer** layer (bringing your own CT) adds the one outward GPU solve, so it also needs the solver extra and a GPU.
+The package is built in **two layers**, and most users only need the first. The **consumer** layer (placement from an already-solved bundle) is pure Python and needs no GPU and no external solver, so if you have a bundle you install the core and go straight to placement (Section 7, step 5). The **producer** layer (bringing your own CT) adds the one outward GPU solve, so it also needs the solver extra and a GPU.
 
 ```bash
 pip install -e .                  # core: numpy, scipy (placement from an existing bundle)
@@ -211,7 +235,7 @@ pip install -e .                  # core: numpy, scipy (placement from an existi
 
 ## Related downstream tool (not in this repo)
 
-`acoustoelastic_ultrasound_neurons` extends this **multiphysics simulation stack** (coupling **acoustic** propagation, radiation-force **shear**-wave strain, **thermal** bioheat, the strain-to-membrane-tension **acousto-electric** transduction, and **neuronal** firing models on one anatomical grid) all the way to per-voxel neural firing. It does not ship with `skull_transparency` and is only a pointer to where this pipeline leads. The FUN 2026 conference abstract is reproduced verbatim below (its Fig. 1 is the composite shown in Figure 8).
+`acoustoelastic_ultrasound_neurons` extends this **multiphysics simulation stack** (coupling **acoustic** propagation, radiation-force **shear**-wave strain, **thermal** bioheat, the strain-to-membrane-tension **acousto-electric** transduction, and **neuronal** firing models on one anatomical grid) all the way to per-voxel neural firing. It does not ship with `skull_transparency` and is only a pointer to where this pipeline leads. The FUN 2026 conference abstract is reproduced verbatim below (its Fig. 1 is the composite shown in Figure 9).
 
 **Background:** Transcranial focused ultrasound (tFUS) is a non-invasive neuromodulation modality with millimetre resolution and access to deep brain structures, yet its biophysical mechanism remains unresolved. Exposure is conventionally specified by transducer surface or derated focal pressure, quantities only indirectly related to what ultimately matters for therapy, namely which neurons fire and through which pathway they are recruited. No published tool carries an exposure prescription through to a per-voxel statement of firing, so competing mechanistic hypotheses cannot be compared on a common field. We present an open-source, end-to-end framework that maps a transcranial acoustic field to per-voxel neural firing maps registered to anatomy, with six interchangeable mechanism modules evaluated on one shared multi-compartment Hodgkin–Huxley neuron.
 
@@ -219,8 +243,8 @@ pip install -e .                  # core: numpy, scipy (placement from an existi
 
 **Results:** At the calibrated exposure (focal PNP 0.50 MPa, MI 0.71, $I_\mathrm{SPPA}$ 8.1 W/cm$^2$, the acoustic metrics remaining within ITRUSST consensus safety envelopes), the focal membrane tension reaches about 6.5 mN/m, roughly 2.4 times the Piezo1 half-activation tension, and the strain-driven Piezo1/TREK-1 pathway alone produces firing at 5,468 brain voxels at up to 300 Hz. The resulting iso-25% firing volume is 8,523 mm$^3$, substantially larger than the acoustic $-6$ dB focal volume (116 mm$^3$) and elongated along the beam axis by the focal aspect ratio (Fig. 1c). Focal heating is modest, with a focal $\Delta T$ of 233 mK and a skull-bone peak of 0.94 K. A real-field mechanism sweep (six strain levels by five scenarios) shows the dendrite-heavy three-compartment geometry is necessary for firing at the working point, where the single-compartment baseline stays subthreshold, while the Piezo1-inactivation/Ca$^{2+}$/SK pathway suppresses firing by about 30 to 33% (up to about 58% at saturation). Sensitivity analysis identifies the Piezo1 half-activation tension and the strain-to-tension product $K_A \cdot \alpha$ as the dominant uncertainties. End-to-end runtime is about 17 min per scenario on a single workstation for the fully volumetric, heterogeneous head model of roughly 28 million voxels over the 130 by 80 by 80 mm volume. By linking acoustic exposure to cellular firing, the framework is released open-source as a starting point for discriminating tFUS mechanisms against experimental recordings.
 
-![Figure 8](figs/adv_fun_composite.png)
+![Figure 9](figs/adv_fun_composite.png)
 
-**Figure 8.** The FUN 2026 abstract's composite Figure 1, the end-to-end prediction for the Yaakub theta-burst sonication through the Halle micro-CT skull, aimed at the left dACC. (a) Simulation pipeline, acoustic FDTD $\to$ radiation-force / shear-FDTD strain and absorption / Pennes thermal, converging on the multi-pathway Hodgkin–Huxley neuromodulation block. (b) Single-burst spike raster across 120 firing voxels sorted by depth, with co-registered ROI slices and a depth histogram. (c) Co-registered focal-plane slices for acoustic intensity, radiation-force displacement, temperature rise, and firing rate (skull outline in cyan). (d) Three-dimensional iso-surfaces of the per-voxel firing rate (50% and 25% of peak) within the skull. Predicted 5,468 firing voxels, iso-25% firing volume 8,523 mm$^3$, focal $\Delta T$ 233 mK.
+**Figure 9.** The FUN 2026 abstract's composite Figure 1, the end-to-end prediction for the Yaakub theta-burst sonication through the Halle micro-CT skull, aimed at the left dACC. (a) Simulation pipeline, acoustic FDTD $\to$ radiation-force / shear-FDTD strain and absorption / Pennes thermal, converging on the multi-pathway Hodgkin–Huxley neuromodulation block. (b) Single-burst spike raster across 120 firing voxels sorted by depth, with co-registered ROI slices and a depth histogram. (c) Co-registered focal-plane slices for acoustic intensity, radiation-force displacement, temperature rise, and firing rate (skull outline in cyan). (d) Three-dimensional iso-surfaces of the per-voxel firing rate (50% and 25% of peak) within the skull. Predicted 5,468 firing voxels, iso-25% firing volume 8,523 mm$^3$, focal $\Delta T$ 233 mK.
 
 All numeric values above are taken from the whole-skull simulation metadata (`halle_hemis_tr_6ppw/meta.json`, cross-checked against the `halle_c_graded.f32` byte size) and the package source.

@@ -4,6 +4,16 @@ What `skull-transparency prepare` (and `build_run_from_medium`) expect: a medium
 a target, an approach vector, and a `TransducerSpec`. For the end-to-end walkthrough see
 [`tutorial.md`](tutorial.md).
 
+> **Brain-center variant.** `prepare --center` (`build_brain_center_run`) needs only the
+> medium, affine, and `TransducerSpec` — **no target and no approach**: it seats one
+> omnidirectional source at the brain center and sizes a cube around the whole head, for a
+> neutral whole-skull transparency map. The target/approach sections below then don't apply.
+> The center is the atlas CoM (MNI frame), else the image-only intracranial centroid, else
+> an explicit `--center-mm x,y,z` (e.g. a curated cavity centroid). For a medium whose bone
+> is slower than the human `2200` m/s default, set `--bone-threshold` (a value above
+> water/soft tissue but below that medium's bone) so the calvarial surface, recording
+> shell, and figure all use the right cutoff.
+
 ## The medium maps
 
 | map | flag | units | required | accepted formats |
@@ -57,7 +67,8 @@ the input path.
 
 `--target x,y,z` — the brain target in **world mm**, in the **same frame as the affine**.
 Comma- or space-separated. (In code, `build_run_from_medium` also accepts a `target_voxel`
-convenience, in which case `target_phys_mm = affine @ [*target_voxel, 1]`.)
+convenience, in which case `target_phys_mm = affine @ [*target_voxel, 1]`.) Omitted for a
+brain-center run (`--center` computes the center for you).
 
 ## The approach vector
 
@@ -70,7 +81,8 @@ seated in from the low-Z face; the grid is sized so the focused-bowl reach
 target elsewhere.
 
 **Required** until `approach='auto'` (the outward skull-normal heuristic) lands — passing it
-as `auto`, or omitting it, currently raises `NotImplementedError`.
+as `auto`, or omitting it, currently raises `NotImplementedError`. (A `--center` run needs
+**no** approach: its source radiates in every direction, so it sidesteps this entirely.)
 
 ## The `TransducerSpec` JSON
 

@@ -46,9 +46,10 @@ Flags:
 | `--rho-map` | optional density map, `.npy`/`.nii` (kg/m³) |
 | `--alpha-map` | optional attenuation map, `.npy`/`.nii` (dB/cm/MHz) — supplying it **auto-enables attenuation** |
 | `--affine` | 4×4 voxel→world-mm `.npy` (else taken from a NIfTI c-map) |
-| `--target` | target in world mm, `'x,y,z'` — **required** |
+| `--target` | target in world mm, `'x,y,z'` — **required** (omit with `--center`) |
+| `--center` | brain-center whole-skull run: one omnidirectional source at the brain center, cube sized to the whole head — needs **no** `--target`/`--approach` (see [Whole-skull baseline](#whole-skull-transparency-brain-center)) |
 | `--transducer` | `TransducerSpec` JSON file or inline string — **required** |
-| `--approach` | aim unit vector target→skin, `'x,y,z'` (required until `approach='auto'` lands) |
+| `--approach` | aim unit vector target→skin, `'x,y,z'` (required until `approach='auto'` lands; not needed with `--center`) |
 | `--input-frame` | provenance label for the world frame (default `ras_mm`) |
 | `--standoff-mm` | acoustic-path headroom around the head when sizing the grid (default `20.0`) |
 | `--surround-mm` | medium kept around the target when sizing the grid (default `90.0`) |
@@ -130,6 +131,56 @@ skull-transparency run --c-map c.npy --affine A.npy --target -12,-57,-34 \
 
 `run` takes the same flags as `prepare`; it writes the sim tree and then **prints** the
 solve/extract/place commands to run next (it does not invoke the GPU solve itself).
+
+## Whole-skull transparency (brain-center)
+
+For a **neutral** picture of where the *whole* skull transmits — independent of any one
+target — run a **brain-center** variant instead of a targeted one. One omnidirectional
+source at the center of the brain radiates in every direction, so a single outward solve
+illuminates the entire calvaria; the `1/r²` distance correction then cancels geometric
+spreading, leaving a map of bone transmission. (This generalises the deprecated `skullonly`
+"center" launcher, whose source actually sat at the dentate, 57 mm off the brain center.)
+
+```bash
+# 1. prepare with --center (no --target/--approach); 2. same GPU solve + extract; then:
+skull-transparency prepare --c-map c.nii.gz --center --transducer ctx500.json --out run/
+python -m skull_transparency.sim outward --sim run --out run --run
+skull-transparency extract --run run/outward --sim run --out run/bundle
+skull-transparency transparency --bundle run/bundle --out transparency.png
+```
+
+`--center` sizes a cube around the whole head and seats the source at the brain center —
+the **atlas centre of mass** (MNI152 brain-mask centroid, MNI `(0,-22,9.5)` mm, mapped
+through the affine) when the medium is in/registered to MNI, else the **intracranial-cavity
+centroid** read from the speed map (`brain_center.py`). Pass an explicit center with
+`--center-mm x,y,z` (e.g. from a curated cavity mask, more robust than hole-fill on a dry
+skull).
+
+**Non-human or thin-bone skulls.** The calvarial-surface cutoff defaults to the human
+`2200` m/s; for a medium whose bone is slower, pass `--bone-threshold` (a value above
+water/soft tissue but below that medium's bone) on `prepare`, `extract`, and
+`transparency`. `extract` records it in the bundle (`physics.bone_threshold`), so
+`transparency` then defaults to the right value with no extra flag.
+
+The `transparency` subcommand computes the `1/r²`-corrected map and renders it as transmitted
+**amplitude in decibels** (the whole-skull `log |p|` convention — linear intensity `p²` has
+too wide a dynamic range and crushes the skull to black):
+
+| flag | meaning |
+|---|---|
+| `--bundle` | Field Bundle directory (e.g. a brain-center run) — **required** |
+| `--out` | output PNG (default `transparency.png`) |
+| `--title` | figure title |
+| `--save-npz` | also write the `TransparencyMap` as `.npz` |
+| `--bone-threshold` | bone speed cutoff m/s for the calvarial surface (default: the bundle's `physics.bone_threshold`) |
+| `--no-distance-correct` | raw peak intensity, no `1/r²` correction |
+
+See `examples/brain_center/run_brain_center.py` for the consumer side end to end (it falls
+back to the synthetic fixture if no lab data is present).
+
+> The brain-center map is for **seeing** where the skull transmits, not for placing a
+> transducer — the `1/r²` correction over-rewards far, thin-bone windows. For an actual
+> placement use a targeted run and `place`.
 
 ## Zero-data smoke test
 

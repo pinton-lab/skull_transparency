@@ -236,8 +236,26 @@ def fig_medium():
     plt.close(fig)
 
 
+def fig_braincenter(bundle="/celerina/gfp/mfs/hemisphere_tr/data/halle_braincenter"):
+    """Real whole-skull transparency from the brain-center run: one omnidirectional
+    source at the atlas brain CoM (MNI 0,-22,9), 1/r^2-corrected. Rendered straight from
+    the shipped library (``render_transparency_surface``) so the figure IS the tool."""
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+    import skull_transparency as st
+    tmap = st.compute_transparency_map(st.load_bundle(bundle))
+    st.render_transparency_surface(
+        tmap, os.path.join(OUT, "fig_braincenter.png"), dpi=200,
+        title="Brain-center whole-skull transparency  (omnidirectional source at the "
+              "brain CoM, MNI 0,-22,9; + = center)")
+
+
 if __name__ == "__main__":
     fig_pipeline(); print("pipeline ok")
     fig_grid(); print("grid ok")
     fig_medium(); print("medium ok")
+    try:
+        fig_braincenter(); print("braincenter ok")
+    except Exception as e:
+        print("braincenter SKIPPED (needs the halle_braincenter bundle):", e)
     print("figures ->", OUT)
