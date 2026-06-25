@@ -44,6 +44,24 @@ Always read the output dict's `frame` key (`nrrd_voxel_mm` with tuba, else `mni_
 no-GPU/no-data smoke test. The CLI (`skull-transparency prepare | extract | place | position`), the
 full API, and the method are all in **[`tutorial/tutorial.pdf`](tutorial/tutorial.pdf)**.
 
+## Interactive placement GUI
+
+`examples/placement_gui.py` is a thin [napari](https://napari.org) panel for *exploring* placement
+on a transparency map — it delegates to `place_bowl_optimal` and the footprint score (no new physics).
+Needs the `[viz]` extra and a display:
+
+```bash
+pip install -e '.[viz]'
+python -c "import skull_transparency as st; st.make_synthetic_bundle('synthetic_bundle')"
+python examples/placement_gui.py --bundle synthetic_bundle          # or your own Field Bundle
+# optionally overlay your probe's element layout:  --elements probe_xy.npy   (N×3 device-frame mm)
+```
+
+**Find optimal placement** marks the best window (green) + footprint (yellow); **Score marker** scores
+a window you drag the cyan marker to (vs. the optimum, with focal-pressure proxy + incidence). Toggles
+for L/R/A/P/S/I labels, the element overlay, and a white-background mode; a colour-coded log records
+each call.
+
 ## One correctness note
 
 Placement uses the **raw** delivered intensity, not the distance-corrected map: by reciprocity the
