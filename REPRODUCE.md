@@ -72,6 +72,19 @@ UNCONFIRMED (needs a representative N>=~400 run). For an identical legacy re-run
 Resolved via `fullwave2_ultra.solver.resolve_binary` (`pip install -e .[solver]`); override with
 `FULLWAVE2_BIN=/path/to/bench_3d_opt`.
 
+**Older clusters / glibc.** The prebuilt `bench_3d_opt` is built against **GLIBC ≥ 2.34**
+(Ubuntu 22.04+). On an older host (e.g. Ubuntu 20.04 / glibc 2.31) it aborts with
+`GLIBC_2.3x not found` (the Python launcher still writes all `.dat` inputs first; only the binary
+load fails). Its only dynamic deps are `libc`/`libm` (CUDA is statically linked, the driver arrives
+via `--nv`), so running it inside a stock Ubuntu-22.04 container fixes it — point `FULLWAVE2_BIN` at
+a one-line wrapper:
+```bash
+apptainer pull ubuntu2204.sif docker://ubuntu:22.04          # (or singularity / docker)
+printf '#!/bin/bash\nexec apptainer exec --nv %s/ubuntu2204.sif /path/to/bench_3d_opt "$@"\n' "$PWD" > bench_wrap.sh
+chmod +x bench_wrap.sh && export FULLWAVE2_BIN=$PWD/bench_wrap.sh
+```
+Keep the run's `--out` on **node-local** storage (genout is tens of GB), not a network mount.
+
 ## 4. Verification (proves the baseline is intact)
 
 ```bash
