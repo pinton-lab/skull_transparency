@@ -3,6 +3,11 @@
 consumes verbatim (``c.f32`` [+ ``rho.f32``/``alpha.f32``], ``meta.json``,
 ``array_coords.i32``, ``registration.json``).
 
+Two entry points: :func:`build_run_from_medium` (a *targeted* run -- needs ``target`` +
+``approach``) and :func:`build_brain_center_run` (a *brain-center whole-skull* run -- one
+omnidirectional source at the brain center, no target/approach; see
+:mod:`skull_transparency.brain_center`).
+
 This is the missing ingestion layer: today the launchers read an *already-posed*
 Halle grid (``halle_c.f32``) plus a hand-built ``meta.json`` / ``ppw55_transform.npz``.
 This module rebuilds those artifacts from a generic medium so a new subject can be
@@ -20,6 +25,9 @@ Status
   unimplemented path is ``approach='auto'`` (the outward skull-normal aim) in
   :func:`_choose_pose`, which raises ``NotImplementedError``; pass an explicit
   ``approach`` unit vector (target -> skin) instead.
+* :func:`build_brain_center_run` (with :func:`_choose_pose_centered`) is **complete**: it
+  seats one omnidirectional source at the brain center in a cube sized to the whole head,
+  so it needs no ``target``/``approach`` and sidesteps ``approach='auto'`` entirely.
 
 Frame convention (decided): ``affine`` is a 4x4 voxel-index -> world-mm map (the
 medium's own frame; NIfTI ``sform`` -> RAS, or a 4x4 built from NRRD
@@ -43,6 +51,7 @@ from pathlib import Path
 import numpy as np
 from scipy.ndimage import affine_transform
 
+from ..brain_center import MNI_BRAIN_COM_MM, brain_center_phys_mm
 from ..registration import Registration
 from ..transducer_spec import TransducerSpec
 
@@ -130,6 +139,64 @@ def build_run_from_medium(c_map, affine, target_phys_mm, spec: TransducerSpec, o
         rho_file="rho.f32" if rho_map is not None else None,
         alpha_file="alpha.f32" if alpha_map is not None else None,
         attenuation=use_attenuation, alpha_units=alpha_units)
+    return out_sim_dir
+
+
+def build_brain_center_run(c_map, affine, spec: TransducerSpec, out_sim_dir, *,
+                           rho_map=None, alpha_map=None, input_frame: str = "ras_mm",
+                           bone_threshold: float = 2200.0, atlas_com_mm=MNI_BRAIN_COM_MM,
+                           center_phys_mm=None, surround_mm: float = 25.0,
+                           array_n_elements=None, attenuation: bool = False,
+                           alpha_units: str = "db_mhz_cm"):
+    """Brain-center variant of :func:`build_run_from_medium`: seat ONE omnidirectional
+    point source at the brain center and size a cube that holds the WHOLE head, so a
+    single outward solve illuminates the entire calvaria for a neutral whole-skull
+    transparency map (the generalised, deprecated ``skullonly`` "center" launcher).
+
+    The center is the atlas brain CoM when the world frame is MNI, else the image-only
+    intracranial centroid (see :mod:`skull_transparency.brain_center`); pass
+    ``center_phys_mm`` to override. No ``--approach`` is needed (the source radiates in
+    every direction), so this also sidesteps the unimplemented ``approach='auto'`` path.
+    The recording shell spans the whole skull (no window cap), so the outward record
+    length covers the farthest bone. Returns the ``out_sim_dir`` path."""
+    out_sim_dir = Path(out_sim_dir)
+    out_sim_dir.mkdir(parents=True, exist_ok=True)
+    affine = np.asarray(affine, float)
+    if center_phys_mm is None:
+        center_phys_mm = brain_center_phys_mm(c_map, affine, world_frame=input_frame,
+                                              bone_threshold=bone_threshold, atlas_com_mm=atlas_com_mm)
+    center_phys_mm = np.asarray(center_phys_mm, float)
+    use_attenuation = bool(alpha_map is not None or attenuation)
+
+    pose = _choose_pose_centered(c_map, affine, center_phys_mm, spec,
+                                 surround_mm=surround_mm, bone_threshold=bone_threshold)
+
+    def _emit(vol, name, background):
+        g = _resample_to_grid(vol, affine, pose, spec.dx_m, background=background)
+        g.ravel(order="F").tofile(str(out_sim_dir / name))
+
+    _emit(c_map, "c.f32", spec.c0_ms)
+    if rho_map is not None:
+        _emit(rho_map, "rho.f32", 1000.0)
+    if alpha_map is not None:
+        _emit(alpha_map, "alpha.f32", 0.0)
+
+    c_grid = np.fromfile(str(out_sim_dir / "c.f32"), dtype="<f4").reshape(
+        pose.N, pose.N, pose.N, order="F")
+    # whole-skull recording shell (no window cap): max_angle_deg=180 keeps every patch,
+    # so launch_outward's record length spans the farthest bone. The bone_threshold flows
+    # through so a c-map whose bone is slower than 2200 m/s still resolves its calvarial
+    # surface here exactly as the pose sizing and the transparency map do.
+    arr = _recording_surface(c_grid, pose.target_grid_vox, spec, n=array_n_elements,
+                             max_angle_deg=180.0, bone_threshold=bone_threshold)
+    _write_array_coords_i32(out_sim_dir / "array_coords.i32", arr)
+
+    write_run_descriptor(
+        out_sim_dir, spec, pose, center_phys_mm, input_frame=input_frame,
+        n_array=len(arr), c_file="c.f32",
+        rho_file="rho.f32" if rho_map is not None else None,
+        alpha_file="alpha.f32" if alpha_map is not None else None,
+        attenuation=use_attenuation, alpha_units=alpha_units, subject_id=out_sim_dir.name)
     return out_sim_dir
 
 
@@ -245,6 +312,35 @@ def _choose_pose(c_map, affine, target_phys_mm, approach, spec, standoff_mm, *,
     target_grid_vox = np.array([N / 2.0, N / 2.0, float(surround_vox)])
     return Pose(R_phys_to_grid=R, target_grid_vox=target_grid_vox, N=N,
                 target_phys_mm=np.asarray(target_phys_mm, float))
+
+
+def _choose_pose_centered(c_map, affine, center_phys_mm, spec, *,
+                          surround_mm: float = 25.0, bone_threshold: float = 2200.0) -> Pose:
+    """Centred, OMNIDIRECTIONAL seat for a brain-center run: the source sits at the cube
+    center and the cube is sized to hold the whole head plus ``surround_mm`` of coupling
+    medium on every side. No approach axis (the wave radiates in all directions), so the
+    rotation is identity (grid axes = world axes); the resample handles the affine.
+
+    The half-extent is read off the bone bounding-box corners mapped to world mm, so an
+    anisotropic head still gets a cube large enough on its longest axis."""
+    c = np.asarray(c_map)
+    affine = np.asarray(affine, float)
+    center = np.asarray(center_phys_mm, float)
+    dx_mm = float(spec.dx_m) * 1e3
+    bone = c > bone_threshold
+    if not bone.any():
+        raise ValueError(f"no bone voxels (c > {bone_threshold}); check the speed-map units/threshold.")
+    idx = np.argwhere(bone)
+    lo, hi = idx.min(0), idx.max(0)
+    corners = np.array([[x, y, z] for x in (lo[0], hi[0]) for y in (lo[1], hi[1])
+                        for z in (lo[2], hi[2])], float)
+    cw = (affine @ np.c_[corners, np.ones(len(corners))].T).T[:, :3]   # bbox corners -> world mm
+    half = np.abs(cw - center).max(0)                                  # per-axis half-extent from center
+    reach_vox = int(np.ceil((half.max() + surround_mm) / dx_mm))
+    N = int(2 * reach_vox)                                             # even cube, source at the center
+    target_grid_vox = np.array([N / 2.0, N / 2.0, N / 2.0])
+    return Pose(R_phys_to_grid=np.eye(3), target_grid_vox=target_grid_vox, N=N,
+                target_phys_mm=center)
 
 
 def _resample_to_grid(vol, affine, pose: Pose, dx_m, *, background=0.0, order=1) -> np.ndarray:

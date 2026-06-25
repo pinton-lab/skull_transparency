@@ -65,7 +65,10 @@ recording where it emerges on the outer skull surface and with what phase. Brigh
 in-phase surface patches are exactly the good acoustic windows; re-emitting that
 recording \textbf{time-reversed} converges back onto the target (Figure~\ref{fig:movie}).
 The tool then searches that recorded surface for the best window and reports a concrete
-transducer placement plus a coupling score.
+transducer placement plus a coupling score. The very same outward recording, taken from a
+source at the \emph{center of the brain} rather than a target, instead gives a neutral
+\textbf{whole-skull} transparency map -- where the skull transmits, independent of any one
+target (Section~\ref{sec:braincenter}).
 
 \begin{figure}[H]\centering
 \animategraphics[controls,loop,width=0.82\linewidth]{12}{../manuscript/figs/movie_frames/frame-}{0}{134}
@@ -233,6 +236,57 @@ mirrors the skull, so a left-side target lands on the right. Always confirm
 laterality) before trusting a result, because nothing throws, it just gives a quietly wrong
 answer.
 
+\section{The brain-center whole-skull transparency baseline}\label{sec:braincenter}
+
+Targeting a deep point answers \emph{where to place the transducer for that target}. A
+complementary question is \emph{how transparent is the skull everywhere}, independent of
+any one target. The tool answers it with a \textbf{brain-center} run: a single virtual
+point source at the center of the brain radiates \textbf{omnidirectionally}, so one
+outward solve illuminates the whole calvaria at near-normal incidence, and the $1/r^2$
+distance correction (Section~\ref{sec:sim}) cancels the residual geometric spreading.
+What remains is a map of bone \emph{transmission} that is not biased toward any window or
+target (Figure~\ref{fig:braincenter}) -- a neutral whole-skull baseline.
+
+It runs through the same pipeline, with no target and no approach (the wave goes every
+way, so the unimplemented \code{approach='auto'} never arises):
+\begin{lstlisting}[style=sh]
+skull-transparency prepare --c-map c.nii.gz --center --transducer ctx500.json --out run/
+#  ... outward GPU solve + extract (Section 7) ...
+skull-transparency transparency --bundle run/bundle --out transparency.png
+\end{lstlisting}
+\code{--center} sizes a cube around the whole head and seats the source at the brain
+center: the \textbf{atlas center of mass} when the medium is in (or registered to) MNI --
+the canonical ICBM152 brain-mask centroid, MNI $(0,-22,9.5)$ mm, mapped in through the
+affine -- otherwise the \textbf{intracranial-cavity centroid} read straight from the
+speed map (\code{brain_center.py}; the image-only centroid is exact for an intact CT but
+only $\sim$2~cm accurate on a \emph{dry} specimen skull whose vault is open, so prefer the
+atlas path when a registration exists). The \code{transparency} subcommand then computes
+the $1/r^2$-corrected map (\code{compute_transparency_map}, distance correction on by
+default) and renders it as transmitted amplitude in decibels
+(\code{render_transparency_surface}, the log-$|p|$ convention).
+
+\begin{figure}[H]\centering
+\includegraphics[width=\linewidth]{figs/fig_braincenter.png}
+\caption{Whole-skull transparency for the reference Halle skull from a brain-center run
+($694{,}363$ surface patches, three anatomical projections; bright $=$ acoustically
+transparent bone). Colour is the $1/r^2$-corrected transmitted \emph{amplitude} in
+decibels relative to the $98$th-percentile window -- the whole-skull convention is
+log~$|p|$, since linear intensity ($p^2$) has too wide a dynamic range and crushes most
+of the skull to black. One omnidirectional source sits at the atlas brain center of mass
+(cyan $+$, MNI $(0,-22,9)$; the field peaks $0.3$~mm from it), $29$--$111$~mm from the
+bone. The thin temporal squama reads transparent; the orbits read dark (openings, where
+intracranial air maps to water, Section~\ref{sec:limits}). This generalises the deprecated
+whole-skull ``center'' launcher, whose source in fact sat at the dentate, $57$~mm off the
+brain center.}
+\label{fig:braincenter}
+\end{figure}
+
+\callout{A baseline, not a placement objective}{The brain-center map is for \emph{seeing}
+where the skull transmits; the $1/r^2$ correction over-rewards far, thin-bone windows, so
+it is the wrong quantity to seat a transducer with. For an actual placement use a targeted
+run and \code{place}, which weights incidence ($\cos^2\theta$) and hard-rejects
+sub-critical patches (Section~\ref{sec:sim}).}
+
 \section{The medium maps for speed, density, and attenuation}
 
 The medium is three co-registered volumes (sound speed $c$, density $\rho$, absorption
@@ -297,6 +351,11 @@ From the console, run \code{skull-transparency extract ...} then
 \code{place_cap_optimal}, which instead takes a \code{CapField} plus seed az/el angles.)
 \end{enumerate}
 
+For a target-free \textbf{whole-skull} baseline, swap steps 3 and 5: \code{prepare --center}
+(no \code{--target}/\code{--approach}) seats the source at the brain center, and after the
+same solve+extract, \code{skull-transparency transparency --bundle run/bundle --out map.png}
+renders the $1/r^2$-corrected map (Section~\ref{sec:braincenter}).
+
 \section{Running the time-reversal simulation and computing the field}\label{sec:sim}
 
 The solve has \textbf{two phases} (Figure~\ref{fig:movie} animates both). The
@@ -348,7 +407,9 @@ arrival. Sampling $p_{\max}$ just outside the bone surface within the direct-arr
 intensity $I=p_{\max}^2/(2\rho c)$ (geometric spreading included, so it is dominated by
 proximity to the target) is the coupling (transparency) map the placement search reads. The
 optional $1/r^2$ distance-corrected map is for \emph{visualizing} bone transmission only;
-using it for placement over-rewards far, thin-bone windows. That search weights each patch by incidence
+using it for placement over-rewards far, thin-bone windows -- it is exactly the neutral
+whole-skull baseline of Section~\ref{sec:braincenter} (rendered there as transmitted
+amplitude in dB). That search weights each patch by incidence
 ($\cos^2\theta$ on the true surface normal) and hard-rejects patches beyond $30^\circ$ (the
 water-to-bone longitudinal critical angle, past which the fluid solver's longitudinal
 transmission gives way to unmodeled shear conversion); the resulting incidence-weighted
@@ -435,7 +496,9 @@ surface integral $\sqrt{J}=\sqrt{\int_S|G|^2\,dS}$ is correct for \emph{choosing
 window but overstates the broadband time-reversal gain and depth of field; quote those
 from the inward re-simulation.
 \item \textbf{\code{approach='auto'} is not implemented.} Pass an explicit
-\code{--approach} unit vector (target\,$\to$\,skin).
+\code{--approach} unit vector (target\,$\to$\,skin), or use the brain-center mode
+(\code{--center}, Section~\ref{sec:braincenter}), whose omnidirectional source needs no
+approach.
 \item \textbf{\code{prepare} sizes a cube.} It uses an $N^3$ grid from the bowl reach
 plus a margin rather than tightening to the head bounding box, which is correct but spends
 more voxels than the hand-cropped reference run.

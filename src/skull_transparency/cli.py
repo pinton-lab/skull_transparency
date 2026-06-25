@@ -6,15 +6,22 @@ Subcommands::
 
   skull-transparency prepare --c-map c.npy --affine A.npy --target 30,30,30 \
       --transducer ctx500.json --approach 0,0,1 --out run/        # -> sim tree (.dat inputs)
+  skull-transparency prepare --c-map c.npy --center \
+      --transducer ctx500.json --out run/                         # brain-center whole-skull (no target)
 
-  # then run the CUDA solve on the sim tree and extract a Field Bundle (see README),
-  # e.g.:  python -m skull_transparency.sim outward --sim run --out run --run
+  # then run the CUDA solve on the sim tree (see README), e.g.:
+  #   python -m skull_transparency.sim outward --sim run --out run --run
+  skull-transparency extract --run run/outward --sim run --out run/bundle   # -> Field Bundle
 
-  skull-transparency place --bundle bundle/ --out result/         # -> the three outputs
+  skull-transparency place        --bundle run/bundle --out result/   # -> the 3 placement outputs
+  skull-transparency transparency --bundle run/bundle --out map.png   # -> whole-skull transparency figure
+  skull-transparency position     --bundle run/bundle --out fig.png   # -> placement preview (--interactive: napari)
+  skull-transparency run ...      # = prepare, then prints the solve/extract/place chain to run next
 
 ``prepare`` needs no GPU (it only writes solver inputs). ``place`` consumes a
 post-solve Field Bundle and emits ``surface_map.npz`` (transparency map),
-``score.json`` (positioning score), and ``placement.json``.
+``score.json`` (positioning score), and ``placement.json``; ``transparency`` renders
+the 1/r^2-corrected whole-skull map (the brain-center baseline).
 """
 from __future__ import annotations
 
@@ -57,7 +64,13 @@ def _load_transducer(spec_arg):
     """Build a TransducerSpec from a JSON file/string. ``{"preset": "ctx500", ...}``
     dispatches to ``TransducerSpec.ctx500(**rest)``; otherwise the dict is the kwargs."""
     from .transducer_spec import TransducerSpec
-    text = Path(spec_arg).read_text() if Path(spec_arg).exists() else spec_arg
+    if Path(spec_arg).exists():
+        text = Path(spec_arg).read_text()
+    elif spec_arg.strip().startswith("{"):
+        text = spec_arg                                   # inline JSON object string
+    else:
+        raise SystemExit(f"--transducer: not a readable file and not inline JSON: {spec_arg!r} "
+                         "(pass a path to a .json file, or a JSON object string).")
     d = json.loads(text)
     preset = d.pop("preset", None)
     if preset == "ctx500":
@@ -70,12 +83,27 @@ def _load_transducer(spec_arg):
 # ---- subcommands -----------------------------------------------------------
 
 def _cmd_prepare(args):
-    from .sim.prepare import build_run_from_medium
+    from .sim.prepare import build_run_from_medium, build_brain_center_run
     c, aff = _load_volume(args.c_map)
     rho = _load_volume(args.rho_map)[0] if args.rho_map else None
     alpha = _load_volume(args.alpha_map)[0] if args.alpha_map else None
     affine = _resolve_affine(args, aff)
     spec = _load_transducer(args.transducer)
+    if args.center:
+        bc_kwargs = {}
+        if args.bone_threshold is not None:
+            bc_kwargs["bone_threshold"] = args.bone_threshold        # non-human/thin-bone speed
+        if args.center_mm:
+            bc_kwargs["center_phys_mm"] = _parse_vec(args.center_mm)  # explicit center (skip atlas/hole-fill)
+        out = build_brain_center_run(
+            c, affine, spec, args.out, rho_map=rho, alpha_map=alpha,
+            input_frame=args.input_frame, **bc_kwargs)
+        print(f"wrote brain-center sim tree {out}  (omnidirectional source at the brain center; "
+              f"solve, extract, then `transparency` the bundle)")
+        return 0
+    if not args.target:
+        raise SystemExit("prepare needs --target (world mm) [+ --approach], or --center for a "
+                         "brain-center whole-skull run.")
     target = _parse_vec(args.target)
     approach = _parse_vec(args.approach) if args.approach else None
     out = build_run_from_medium(
@@ -83,6 +111,23 @@ def _cmd_prepare(args):
         input_frame=args.input_frame, approach=approach,
         standoff_mm=args.standoff_mm, surround_mm=args.surround_mm)
     print(f"wrote sim tree {out}  (now run the solver, then `place` the bundle)")
+    return 0
+
+
+def _cmd_transparency(args):
+    import skull_transparency as st
+    bundle = st.load_bundle(args.bundle)
+    thr = (args.bone_threshold if args.bone_threshold is not None
+           else float(bundle.physics.get("bone_threshold", 2200.0)))   # bundle carries the medium's cutoff
+    opts = st.TransparencyOptions(distance_correct=not args.no_distance_correct, bone_threshold=thr)
+    tmap = st.compute_transparency_map(bundle, options=opts, log=(print if args.verbose else None))
+    if args.save_npz:
+        tmap.to_npz(args.save_npz)
+    out = args.out or "transparency.png"
+    st.render_transparency_surface(tmap, out, title=args.title)
+    dc = "raw (no 1/r^2)" if args.no_distance_correct else "1/r^2-corrected"
+    print(f"transparency [{dc}]: {len(tmap.surf_vox)} patches, peak {tmap.Ipk_Wcm2.max():.3g} W/cm^2; "
+          f"wrote {out}")
     return 0
 
 
@@ -118,7 +163,10 @@ def _cmd_place(args):
 
 def _cmd_extract(args):
     from .sim.extract import extract_bundle
-    out = extract_bundle(args.run, args.out, args.sim, n_out=args.n_out)
+    kw = {"n_out": args.n_out}
+    if args.bone_threshold is not None:
+        kw["bone_threshold"] = args.bone_threshold          # recorded into bundle physics
+    out = extract_bundle(args.run, args.out, args.sim, **kw)
     print(f"wrote Field Bundle {out}")
     return 0
 
@@ -165,7 +213,15 @@ def build_parser():
         sp.add_argument("--rho-map", help="optional density map (.npy/.nii)")
         sp.add_argument("--alpha-map", help="optional attenuation map dB/cm/MHz (.npy/.nii); auto-enables attenuation")
         sp.add_argument("--affine", help="4x4 voxel->world-mm .npy (else taken from a NIfTI c-map)")
-        sp.add_argument("--target", required=True, help="target in world mm, 'x,y,z'")
+        sp.add_argument("--target", help="target in world mm, 'x,y,z' (omit with --center)")
+        sp.add_argument("--center", action="store_true",
+                        help="brain-center whole-skull run: one omnidirectional source at the brain "
+                             "center, cube sized to the whole head (no --target/--approach needed)")
+        sp.add_argument("--center-mm", help="with --center: explicit brain center in world mm 'x,y,z' "
+                        "(else atlas CoM for an MNI frame, or the image-only intracranial centroid)")
+        sp.add_argument("--bone-threshold", type=float, default=None,
+                        help="bone sound-speed cutoff m/s (default 2200, the human value); lower it for "
+                             "a medium whose bone is slower (a value above water/soft tissue, below bone)")
         sp.add_argument("--transducer", required=True, help="TransducerSpec JSON file or string")
         sp.add_argument("--approach", help="aim unit vector target->skin, 'x,y,z' (required until auto)")
         sp.add_argument("--input-frame", default="ras_mm", help="provenance label for the world frame")
@@ -189,6 +245,9 @@ def build_parser():
     sp.add_argument("--run", required=True, help="solved outward run dir (holds genout_mod.dat)")
     sp.add_argument("--sim", required=True, help="producer sim tree (meta.json + c.f32 + registration.json)")
     sp.add_argument("--n-out", type=int, default=None, help="outward frame count (default: all recorded)")
+    sp.add_argument("--bone-threshold", type=float, default=None,
+                    help="bone sound-speed cutoff m/s recorded into the bundle (default 2200; "
+                         "use the producer's value for a non-human/thin-bone medium)")
     sp.add_argument("--out", required=True, help="output Field Bundle directory")
     sp.set_defaults(func=_cmd_extract)
 
@@ -201,6 +260,20 @@ def build_parser():
     sp.add_argument("--verbose", action="store_true")
     sp.add_argument("--out", default=None, help="output PNG (default placement_preview.png)")
     sp.set_defaults(func=_cmd_position)
+
+    sp = sub.add_parser("transparency",
+                        help="Field Bundle -> whole-skull transparency figure (1/r^2-corrected)")
+    sp.add_argument("--bundle", required=True, help="Field Bundle directory (e.g. a brain-center run)")
+    sp.add_argument("--out", default=None, help="output PNG (default transparency.png)")
+    sp.add_argument("--title", default=None)
+    sp.add_argument("--save-npz", default=None, help="also write the TransparencyMap as .npz")
+    sp.add_argument("--bone-threshold", type=float, default=None,
+                    help="bone sound-speed cutoff m/s for the calvarial surface "
+                         "(default: the bundle's physics.bone_threshold)")
+    sp.add_argument("--no-distance-correct", action="store_true",
+                    help="raw peak intensity, no 1/r^2 spreading correction")
+    sp.add_argument("--verbose", action="store_true")
+    sp.set_defaults(func=_cmd_transparency)
 
     sp = sub.add_parser("run", help="prepare (+ the solve/extract/place chain to run next)")
     add_prepare(sp); sp.set_defaults(func=_cmd_run)

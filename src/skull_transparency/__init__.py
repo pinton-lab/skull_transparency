@@ -18,6 +18,9 @@ from .projection import project_to_sphere, energy_on_unit_sphere
 from .neuromod import to_placement_dict
 from .score import PositioningScore
 from .sample import make_synthetic_bundle
+from .brain_center import (MNI_BRAIN_COM_MM, intracranial_centroid, cavity_mask_centroid,
+                           brain_center_phys_mm, brain_center_from_registration)
+from .render import render_transparency_surface
 
 __all__ = [
     "Registration",
@@ -38,5 +41,9 @@ __all__ = [
     "to_placement_dict",
     "PositioningScore",
     "make_synthetic_bundle",
+    "MNI_BRAIN_COM_MM",
+    "intracranial_centroid", "cavity_mask_centroid",
+    "brain_center_phys_mm", "brain_center_from_registration",
+    "render_transparency_surface",
 ]
 __version__ = "0.1.0"

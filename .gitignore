@@ -19,6 +19,11 @@ manuscript/
 *.npy
 *.npz
 
+# ...but allow small committed golden fixtures under tests/ (the broad ignore above
+# would otherwise silently drop them).
+!tests/**/*.npy
+!tests/**/*.npz
+
 # ── Python build / packaging / caches ──
 __pycache__/
 *.py[cod]

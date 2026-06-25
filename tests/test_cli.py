@@ -51,3 +51,10 @@ def test_prepare_writes_sim_tree(tmp_path):
 def test_prepare_requires_args():
     with pytest.raises(SystemExit):                       # argparse: missing required options
         cli.main(["prepare"])
+
+
+def test_load_transducer_missing_file_errors():
+    # a path-looking arg that doesn't exist (and isn't inline JSON) gives a clear error,
+    # not a confusing json.loads failure on the path string itself.
+    with pytest.raises(SystemExit):
+        cli._load_transducer("does_not_exist.json")
