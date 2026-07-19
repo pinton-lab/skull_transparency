@@ -1,29 +1,15 @@
-# REPRODUCE — manuscript PDF and results
+# REPRODUCE — results
 
-Pinned entry points for regenerating the paper and its numbers. The repo is now
-git-tracked (main); treat the files listed under "Results-critical — do not modify" as
-the frozen baseline; the new front-end work (see bottom) is additive and inert.
+Pinned entry points for regenerating the transparency maps, placement windows, and focus
+numbers. Treat the files listed under "Results-critical — do not modify" as the frozen
+baseline; the new front-end work (see bottom) is additive and inert.
 
 ## 1. The manuscript
 
-Canonical source is **`manuscript/manuscript_pmb.tex`** (PMB / IOP; uses the local
-`manuscript/iopjournal.cls`). It is the freshest tex and the one that produced the
-submitted `manuscript/manuscript_pmb.pdf`.
-
-> `manuscript/manuscript.tex` and `manuscript/manuscript_v2.tex` (and the `*.bak*`
-> files) are **historical / stale** — do not build from them. `manuscript.pdf` is an
-> older render of the stale `manuscript.tex`.
-
-Rebuild the PDF (no bibtex — bibliography is an inline `thebibliography`):
-
-```bash
-cd manuscript
-pdflatex manuscript_pmb.tex     # run 2-3x to settle cross-references
-pdflatex manuscript_pmb.tex
-```
-
-Requires the 76 figures in `manuscript/figs/` (committed; regenerate only if a number
-changes — see §2/§3).
+The manuscript is maintained **outside this repository** and is **not included in the
+public tree** (`manuscript/` is gitignored). The headline focus-gain numbers it reports
+are reproduced by the pure-Python pipeline in §2 — treat those regenerated outputs as the
+source of truth here.
 
 ## 2. The pure-Python results pipeline (transparency map + placement)
 
@@ -46,10 +32,10 @@ To relocate, `export SKULL_TR_DATA_ROOT=/your/path` or edit `config.json`:
 | grid/physics meta | `$SKULL_TR_DATA_ROOT/sim/meta.json` |
 | sim↔MNI transform | `$SKULL_TR_DATA_ROOT/sim/ppw55_transform.npz` |
 
-The finalized figures/numbers live under **`runs/rebuild_6ppw_graded/`** (the graded
-6-ppw rebuild; `runs/rebuild_6ppw_20260616/` is the prior pass). The headline
-focus-gain figures are stated in `manuscript_pmb.tex` — treat the manuscript as the
-source of truth for the exact values.
+The precomputed solver outputs live under **`runs/`** (e.g. `runs/rebuild_6ppw_graded/`,
+the graded 6-ppw rebuild), which is **not committed** (~275 GB; gitignored). The pipeline
+above regenerates the maps, placement, and focus numbers from the Halle Field Bundle —
+that is the reproducible path in this repo.
 
 ## 3. The simulation layer (only if re-solving the wavefields)
 
@@ -90,7 +76,8 @@ pure-numeric equivalences); the GB-writing regeneration is gated behind
 
 Compute layer: `src/skull_transparency/{transparency,placement,metrics,bundle,registration,surface,complex_field,projection,neuromod,transducer}.py`
 Solver inputs: `src/skull_transparency/sim/{launch_core,launchers,_common,fwio,forcoef,mlcompat}.py`
-Data/artifacts: `runs/`, `manuscript/`, and the external `hemisphere_tr` tree above.
+Data/artifacts (NOT committed to this public repo): `runs/`, `manuscript/`, and the
+external `hemisphere_tr` tree above.
 
 ## Generic-subject front-end (added; guarded, Halle-identical)
 
