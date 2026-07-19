@@ -21,8 +21,11 @@ import sys
 from pathlib import Path
 
 import skull_transparency as st
+from skull_transparency import paths
 
-REAL = Path("/celerina/gfp/mfs/hemisphere_tr/data/halle_braincenter")
+# Real brain-center bundle (override the root with $SKULL_TR_DATA_ROOT); falls back
+# to the zero-data synthetic fixture below if this isn't present.
+REAL = paths.bundle_dir("halle_braincenter")
 
 
 def main(out="brain_center_run"):

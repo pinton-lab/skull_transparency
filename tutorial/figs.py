@@ -236,13 +236,19 @@ def fig_medium():
     plt.close(fig)
 
 
-def fig_braincenter(bundle="/celerina/gfp/mfs/hemisphere_tr/data/halle_braincenter"):
+def fig_braincenter(bundle=None):
     """Real whole-skull transparency from the brain-center run: one omnidirectional
     source at the atlas brain CoM (MNI 0,-22,9), 1/r^2-corrected. Rendered straight from
-    the shipped library (``render_transparency_surface``) so the figure IS the tool."""
+    the shipped library (``render_transparency_surface``) so the figure IS the tool.
+
+    ``bundle`` defaults to the ``halle_braincenter`` Field Bundle under
+    ``$SKULL_TR_DATA_ROOT`` (see ``skull_transparency.paths``)."""
     import sys
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
     import skull_transparency as st
+    if bundle is None:
+        from skull_transparency import paths
+        bundle = paths.bundle_dir("halle_braincenter")
     tmap = st.compute_transparency_map(st.load_bundle(bundle))
     st.render_transparency_surface(
         tmap, os.path.join(OUT, "fig_braincenter.png"), dpi=200,

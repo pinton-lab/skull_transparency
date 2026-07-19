@@ -23,11 +23,12 @@ registration = ["nibabel>=5.0", "tuba"]                  # MNI<->subject via tub
 viz = ["matplotlib>=3.7", "napari", "imageio-ffmpeg"]    # surface render / movie
 dev = ["pytest>=7.4"]
 solver = ["fullwave2-ultra"]   # GPU preflight + binary resolution for run_solver=True (bench_3d_opt)
-# NB: `tuba` and `fullwave2-ultra` are NOT on PyPI — they resolve from the sibling
-# checkouts via [tool.uv.sources] below (use `uv`, or `pip install -e ../tuba` first).
-# The CUDA solver EXECUTABLE (fullwave2-ultra `bench_3d_opt`) is distributed separately
-# (PolyForm Noncommercial); point FULLWAVE2_BIN at it, or install the [solver] extra to
-# resolve/preflight it. See src/skull_transparency/sim/.
+# NB: `tuba` and `fullwave2-ultra` are NOT on PyPI — the [registration]/[solver]
+# extras resolve them from their pinton-lab GitHub repos via [tool.uv.sources] below
+# (or `pip install "git+https://github.com/pinton-lab/<name>.git"`). The base install
+# (numpy/scipy) needs neither. The CUDA solver EXECUTABLE (fullwave2-ultra `bench_3d_opt`)
+# is distributed separately (PolyForm Noncommercial); point FULLWAVE2_BIN at it, or install
+# the [solver] extra to resolve/preflight it. See src/skull_transparency/sim/.
 
 [project.scripts]
 skull-transparency = "skull_transparency.cli:main"
@@ -36,5 +37,7 @@ skull-transparency = "skull_transparency.cli:main"
 where = ["src"]
 
 [tool.uv.sources]
-tuba = { path = "../tuba", editable = true }
-fullwave2-ultra = { path = "../fullwave2-ultra", editable = true }
+# Resolved from their pinton-lab GitHub repos (not on PyPI). For local co-development
+# against sibling checkouts, override with `uv sync --editable ../tuba` etc.
+tuba = { git = "https://github.com/pinton-lab/tuba.git" }
+fullwave2-ultra = { git = "https://github.com/pinton-lab/fullwave2-ultra.git" }
