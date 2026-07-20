@@ -46,6 +46,64 @@ def _read_genout_mod(path, nXe, mod):
         return np.fromfile(str(path), dtype="<f4").reshape(-1, n2, n2, n2)
 
 
+def _extract_shell(run_dir, out_dir, sim_dir, ws, meta, N, bone_threshold, c_bone) -> Path:
+    """Shell-recorder extract: read the surface time-series from the ``genout`` coordinate
+    recorder and time-collapse to per-patch ``(Iint, Pmax)``. No ``genout_mod`` -- ~150-1000x
+    less data than the volume path. The launch-time surface (``surf_vox``/``rhat``) is read
+    from ``workspace.npz`` so the genout channels align exactly."""
+    n_array = int(ws["x_n_array"])
+    surf_vox = np.asarray(ws["x_surf_vox"], float)
+    rhat = np.asarray(ws["x_rhat"], float)
+    M = surf_vox.shape[0]
+    ncoordsout = n_array + M
+
+    g = run_dir / "genout.dat"
+    if not g.exists():
+        raise FileNotFoundError(f"{g} not found -- shell extract needs the solved genout.dat "
+                                "(run the solve with run_solver=True).")
+    G = np.fromfile(g, dtype="<f4").reshape(-1, ncoordsout)       # (nframes, ncoordsout)
+    shell = G[:, n_array:n_array + M].astype(np.float64)          # (nframes, M) surface time-series
+    nframes = shell.shape[0]
+    n_out = nframes                                              # outward run: every recorded frame is outward
+    Iint = (shell[:n_out] ** 2).sum(0)                           # (M,) time-integrated intensity (Pa^2.samples)
+    Pmax = np.abs(shell[:n_out]).max(0)                          # (M,) peak |p| (Pa)
+    np.savez(out_dir / "surface_field.npz", surf_vox=surf_vox, rhat=rhat,
+             Iint=Iint.astype(np.float32), Pmax=Pmax.astype(np.float32))
+
+    c_file = meta.get("c_file", "halle_c.f32")
+    c = np.fromfile(sim_dir / c_file, dtype="<f4").reshape(N, N, N, order="F")
+    np.save(out_dir / "skull_fullres_c.npy", c)
+
+    target_fullres = np.asarray(meta["dent_grid"], float)
+    reg_src = sim_dir / "registration.json"
+    target_mni = None
+    if reg_src.exists():
+        from ..registration import Registration
+        reg = Registration.from_json(reg_src)
+        reg.to_json(out_dir / "registration.json")
+        target_mni = list(map(float, reg.target_mni_mm))
+
+    (out_dir / "phase_info.json").write_text(json.dumps({"n_out": n_out, "n_total": nframes}))
+    spec = {
+        "schema": SCHEMA, "recorder": "shell",
+        "subject_id": meta.get("subject_id", sim_dir.name),
+        "grid": {"N": N, "dx_m": float(meta["dX_m"]), "order": "C", "field_mod": 1, "n_field": N},
+        "physics": {"c0": float(meta.get("C0", 1540.0)), "f0": float(meta.get("F0", 1e6)),
+                    "rho0": 1000.0, "c_bone": float(c_bone), "bone_threshold": float(bone_threshold),
+                    "ppw": meta.get("ppw")},
+        "target": {"name": meta.get("subject_id", "target") + "_target", "mni_ras_mm": target_mni,
+                   "fullres_voxel": target_fullres.tolist(), "field_voxel": target_fullres.tolist()},
+        "array": {"n_elements": n_array, "center_fullres_voxel": meta.get("array_center"),
+                  "coords_file": "array_coords.i32", "geometry": meta.get("transducer", {})},
+        "phases": {"n_out": n_out, "n_total": nframes, "n_total_file": nframes},
+        "files": {"skull_fullres_c": "skull_fullres_c.npy", "surface_field": "surface_field.npz"},
+        "registration": "registration.json",
+        "provenance": {"extracted_from": str(run_dir), "sim_dir": str(sim_dir), "recorder": "shell"},
+    }
+    (out_dir / "bundle.json").write_text(json.dumps(spec, indent=1))
+    return out_dir
+
+
 def extract_bundle(run_dir, out_dir, sim_dir, *, n_out=None, mod: int = MOD,
                    bone_threshold: float = 2200.0, c_bone: float = 2900.0) -> Path:
     """Build a Field Bundle in ``out_dir`` from the solved outward ``run_dir``
@@ -61,6 +119,13 @@ def extract_bundle(run_dir, out_dir, sim_dir, *, n_out=None, mod: int = MOD,
     out_dir.mkdir(parents=True, exist_ok=True)
     meta = C.load_meta(sim_dir)
     N = int(meta["N"])
+
+    ws_path = run_dir / "workspace.npz"                # shell-recorder run? -> surface path (no genout_mod)
+    if ws_path.exists():
+        ws = np.load(ws_path, allow_pickle=True)
+        if "x_recorder" in ws.files and str(ws["x_recorder"]) == "shell":
+            return _extract_shell(run_dir, out_dir, sim_dir, ws, meta, N, bone_threshold, c_bone)
+
     nf = len(range(0, N, mod))                         # == volume_recorders' per-axis count
     nXe = N + 2 * PAD
 

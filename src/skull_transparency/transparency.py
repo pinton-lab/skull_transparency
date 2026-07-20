@@ -75,16 +75,21 @@ def compute_transparency_map(source, options: TransparencyOptions = Transparency
     bundle = source if isinstance(source, FieldBundle) else load_bundle(source)
 
     c = bundle.skull_c()                                   # (N,N,N) speed map
-    Iint_vol, Pmax_vol = bundle.outward_iint_pmax(log=log)  # (nf,nf,nf) each
-    mod = bundle.grid["field_mod"]
     dx_mm = bundle.grid["dx_m"] * 1e3
     target_fullres = np.asarray(bundle.target["fullres_voxel"], float)
     o = options
 
-    surf_vox, rhat = extract_external_surface(c, target_fullres, o.bone_threshold, o.surface_probe_vox)
-    Pout = surf_vox + o.standoff_pad_vox * rhat
-    Ival = map_coordinates(Iint_vol, (Pout / mod).T, order=1)
-    Pval = map_coordinates(Pmax_vol, (Pout / mod).T, order=1)
+    sf = bundle.surface_field() if hasattr(bundle, "surface_field") else None
+    if sf is not None:                                     # shell recorder: field recorded on the surface directly
+        surf_vox, rhat = sf["surf_vox"], sf["rhat"]
+        Ival, Pval = sf["Iint"], sf["Pmax"]
+    else:                                                  # volume recorder: sample the decimated field at the standoff
+        Iint_vol, Pmax_vol = bundle.outward_iint_pmax(log=log)  # (nf,nf,nf) each
+        mod = bundle.grid["field_mod"]
+        surf_vox, rhat = extract_external_surface(c, target_fullres, o.bone_threshold, o.surface_probe_vox)
+        Pout = surf_vox + o.standoff_pad_vox * rhat
+        Ival = map_coordinates(Iint_vol, (Pout / mod).T, order=1)
+        Pval = map_coordinates(Pmax_vol, (Pout / mod).T, order=1)
     rad_mm = np.linalg.norm(surf_vox - target_fullres, axis=1) * dx_mm
     Ipk_Wcm2 = peak_intensity(Pval, o.rho0, o.c0) / 1e4
     nrm = true_normals(c, surf_vox, o.bone_threshold, o.normal_smooth)

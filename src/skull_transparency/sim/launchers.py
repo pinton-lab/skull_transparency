@@ -117,8 +117,21 @@ def _bone_bbox_crop(sim_dir, NB, MARGIN):
 # OUTWARD launchers
 # ============================================================================
 
-def launch_outward(sim_dir, out_root, run_solver=False, write_maps=True, attenuation=False, p0=1.0):
-    """fullwave2_launch_halle_hemis_tr_outward.m  ->  <out_root>/outward"""
+def launch_outward(sim_dir, out_root, run_solver=False, write_maps=True, attenuation=False, p0=1.0,
+                   recorder="volume", surf_bone_threshold=2200.0, surf_probe_vox=2.5,
+                   surf_standoff_vox=4.0):
+    """fullwave2_launch_halle_hemis_tr_outward.m  ->  <out_root>/outward
+
+    ``recorder`` selects what the outward run records:
+      * ``"volume"`` (default) -- the (modX,modY,modZ)-decimated FULL field -> ``genout_mod.dat``
+        (bit-for-bit the legacy behaviour; extract reads the whole padded volume).
+      * ``"shell"`` -- ONLY the calvarial-surface standoff points (via the ``genout`` coordinate
+        recorder). No ``genout_mod`` is written; ``genout.dat`` gains M extra channels holding the
+        surface time-series. This is ~150-1000x less data (the transparency map samples only that
+        shell), so a 6-PPW whole-skull run fits a laptop / free Colab. ``surf_*`` mirror
+        ``TransparencyOptions`` (bone_threshold / surface_probe_vox / standoff_pad_vox); they must
+        match the values ``compute_transparency_map`` uses. The launch-time surface is persisted in
+        ``workspace.npz`` so ``extract`` aligns the channels exactly."""
     outdir = _chdir(os.path.join(out_root, "outward"))
     meta = C.load_meta(sim_dir)
     N = int(meta["N"]); dX = meta["dX_m"]; c0 = meta["C0"]; f0 = meta["F0"]
@@ -139,8 +152,18 @@ def launch_outward(sim_dir, out_root, run_solver=False, write_maps=True, attenua
     arr, _ = C.array_coords_from_i32(os.path.join(sim_dir, "array_coords.i32"))
     outcoordsA = C.array_outcoords(arr)
     modT, modX, modY, modZ = 8, 2, 2, 2
-    vol = C.volume_recorders(N, modX, modY, modZ)
-    outcoords = np.concatenate([outcoordsA, vol], axis=0)
+    shell_extra = None
+    if recorder == "shell":
+        from ..surface import extract_external_surface
+        surf_vox, rhat = extract_external_surface(c, dent, surf_bone_threshold, surf_probe_vox)
+        Pout = np.clip(np.rint(surf_vox + surf_standoff_vox * rhat), 0, N - 1)   # standoff -> nearest voxel
+        outcoords = np.concatenate([outcoordsA, C.surface_recorders(Pout)], axis=0)
+        shell_extra = dict(recorder="shell", n_array=nA, surf_vox=surf_vox, rhat=rhat,
+                           surf_bone_threshold=surf_bone_threshold, surf_probe_vox=surf_probe_vox,
+                           surf_standoff_vox=surf_standoff_vox)
+    else:
+        vol = C.volume_recorders(N, modX, modY, modZ)
+        outcoords = np.concatenate([outcoordsA, vol], axis=0)
     dmax = np.sqrt(((arr - dent) ** 2).sum(axis=1)).max() * dX
     duration = 1.84 * dmax / c0
     nT = int(matlab_round(duration * c0 / lam * ppw / cfl))
@@ -148,7 +171,9 @@ def launch_outward(sim_dir, out_root, run_solver=False, write_maps=True, attenua
 
     cwd = os.getcwd(); os.chdir(outdir)
     try:
-        fwio.writeVabs("int", modT, "modT", modX, "modX", modY, "modY", modZ, "modZ")
+        fwio.writeVabs("int", modT, "modT")
+        if recorder != "shell":            # modX/Y/Z absent -> solver skips the genout_mod volume dump
+            fwio.writeVabs("int", modX, "modX", modY, "modY", modZ, "modZ")
         launch_core(c0, omega0, N * dX, N * dX, N * dX, duration, p0, ppw, cfl,
                     c, rho, incoords, outcoords, nTic, write_maps=write_maps,
                     attenuation=use_atten, alpha_map=alpha_map, betaval=betaval)
@@ -163,9 +188,10 @@ def launch_outward(sim_dir, out_root, run_solver=False, write_maps=True, attenua
                                       beta=betaval,
                                       modT=modT, modX=modX, modY=modY, modZ=modZ, nTic=nTic),
                          incoords=incoords, oc_array=outcoordsA,
-                         vol_params=(N, modX, modY, modZ),
+                         vol_params=(None if recorder == "shell" else (N, modX, modY, modZ)),
                          medium=dict(kind="halle_c", file=c_file, N=N,
-                                     rho_file=rho_file, alpha_file=alpha_file))
+                                     rho_file=rho_file, alpha_file=alpha_file),
+                         extra=shell_extra)
     finally:
         os.chdir(cwd)
     _maybe_run(outdir, sim_dir, run_solver)
