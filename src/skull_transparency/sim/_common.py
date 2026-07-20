@@ -123,6 +123,22 @@ def array_outcoords(arr):
     return oc
 
 
+def surface_recorders(pts_vox):
+    """Shell recorders at explicit voxel points ``pts_vox`` (M,3): col4=-2, col5=3.
+
+    Same ``[i,j,k, id, type]`` row layout as ``array_outcoords``/``volume_recorders``.
+    ``launch_outward(recorder='shell')`` uses this to record the field ONLY on the
+    calvarial-surface standoff points, in place of the whole decimated volume -- so the
+    transparency map (which only samples that shell) needs no ``genout_mod`` dump."""
+    pts = np.atleast_2d(np.asarray(pts_vox, dtype=np.float64))
+    M = pts.shape[0]
+    oc = np.empty((M, 5), dtype=np.float64)
+    oc[:, 0:3] = pts[:, :3]
+    oc[:, 3] = -2
+    oc[:, 4] = 3
+    return oc
+
+
 # ---- workspace sidecar -----------------------------------------------------
 
 def save_workspace(path, scalars: dict, incoords, oc_array, vol_params,

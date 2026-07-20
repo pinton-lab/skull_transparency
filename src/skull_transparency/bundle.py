@@ -39,6 +39,17 @@ class FieldBundle:
     def skull_c(self):
         return np.asarray(np.load(self._p("skull_fullres_c"), mmap_mode="r"))
 
+    def surface_field(self):
+        """Per-patch surface field from a shell-recorder run: dict(surf_vox, rhat, Iint, Pmax),
+        each aligned to the calvarial surface. ``None`` for a volume-recorder bundle (which
+        stores the decimated field instead; see :meth:`outward_iint_pmax`)."""
+        f = self.files.get("surface_field")
+        if not f or not (self.dir / f).exists():
+            return None
+        d = np.load(self.dir / f)
+        return dict(surf_vox=np.asarray(d["surf_vox"], float), rhat=np.asarray(d["rhat"], float),
+                    Iint=np.asarray(d["Iint"], float), Pmax=np.asarray(d["Pmax"], float))
+
     def outward_iint_pmax(self, log=None):
         """Cached (outward_Iint/Pmax.npy) if present, else integrate the outward phase."""
         fI = self.dir / self.files.get("outward_Iint", "outward_Iint.npy")

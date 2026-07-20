@@ -47,6 +47,10 @@ def main(argv=None):
     p.add_argument("--target-vox", default=None)
     p.add_argument("--gpuid", default="0")
     p.add_argument("--run", action="store_true", help="invoke the CUDA solver")
+    p.add_argument("--recorder", default="volume", choices=["volume", "shell"],
+                   help="(outward) field recorder: 'volume' = genout_mod full-field dump (default); "
+                        "'shell' = calvarial-surface only (~150-1000x smaller; enough for the "
+                        "transparency map, so a 6-PPW whole-skull run fits a laptop / free Colab)")
     p.add_argument("--dirs", nargs="*", default=None, help="(verify) subdirs to check")
     p.add_argument("--full", action="store_true",
                    help="(verify) also regenerate+compare the multi-GB medium maps "
@@ -63,7 +67,7 @@ def main(argv=None):
 
     tv = _parse_vox(a.target_vox) if a.target_vox else None
     dispatch = {
-        "outward": lambda: L.launch_outward(sim, out, run_solver=run),
+        "outward": lambda: L.launch_outward(sim, out, run_solver=run, recorder=a.recorder),
         "inward": lambda: L.launch_inward(sim, out, run_solver=run),
         "inward_windowed": lambda: L.launch_inward_windowed(sim, out, run_solver=run),
         "inward_focalbox": lambda: L.launch_inward_focalbox(sim, out, run_solver=run),
