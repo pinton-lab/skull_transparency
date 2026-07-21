@@ -138,15 +138,16 @@ def launch_outward(sim_dir, out_root, run_solver=False, write_maps=True, attenua
         ``workspace.npz`` so ``extract`` aligns the channels exactly."""
     outdir = _chdir(os.path.join(out_root, "outward"))
     meta = C.load_meta(sim_dir)
-    N = int(meta["N"]); dX = meta["dX_m"]; c0 = meta["C0"]; f0 = meta["F0"]
+    Nx, Ny, Nz = C.grid_shape(meta)              # interior dims (a brain-center box may be non-cubic)
+    dX = meta["dX_m"]; c0 = meta["C0"]; f0 = meta["F0"]
     omega0 = 2 * np.pi * f0; cfl = 0.2
     lam = c0 / f0; ppw = lam / dX
     c_file = meta.get("c_file", "halle_c.f32")   # generic producer writes c_file; Halle = halle_c.f32
-    c = np.fromfile(os.path.join(sim_dir, c_file), dtype="<f4").reshape(N, N, N, order="F").astype(np.float64)
+    c = np.fromfile(os.path.join(sim_dir, c_file), dtype="<f4").reshape(Nx, Ny, Nz, order="F").astype(np.float64)
     rho_file, alpha_file = meta.get("rho_file"), meta.get("alpha_file")
-    rho = (np.fromfile(os.path.join(sim_dir, rho_file), dtype="<f4").reshape(N, N, N, order="F").astype(np.float32)
+    rho = (np.fromfile(os.path.join(sim_dir, rho_file), dtype="<f4").reshape(Nx, Ny, Nz, order="F").astype(np.float32)
            if rho_file else C.rho_from_c(c))                       # supplied density else rho_from_c
-    alpha_map = (np.fromfile(os.path.join(sim_dir, alpha_file), dtype="<f4").reshape(N, N, N, order="F").astype(np.float64)
+    alpha_map = (np.fromfile(os.path.join(sim_dir, alpha_file), dtype="<f4").reshape(Nx, Ny, Nz, order="F").astype(np.float64)
                  if alpha_file else None)                          # supplied dB/MHz/cm else c-porosity
     use_atten = bool(attenuation or alpha_file or meta.get("attenuation"))
     betaval = float(meta.get("beta", 5.5))                          # user-set nonlinearity
@@ -160,13 +161,14 @@ def launch_outward(sim_dir, out_root, run_solver=False, write_maps=True, attenua
     if recorder == "shell":
         from ..surface import extract_external_surface
         surf_vox, rhat = extract_external_surface(c, dent, surf_bone_threshold, surf_probe_vox)
-        Pout = np.clip(np.rint(surf_vox + surf_standoff_vox * rhat), 0, N - 1)   # standoff -> nearest voxel
+        Pout = np.clip(np.rint(surf_vox + surf_standoff_vox * rhat), 0,
+                       np.array([Nx, Ny, Nz]) - 1)                  # standoff -> nearest voxel (per axis)
         outcoords = np.concatenate([outcoordsA, C.surface_recorders(Pout)], axis=0)
         shell_extra = dict(recorder="shell", n_array=nA, surf_vox=surf_vox, rhat=rhat,
                            surf_bone_threshold=surf_bone_threshold, surf_probe_vox=surf_probe_vox,
                            surf_standoff_vox=surf_standoff_vox)
     else:
-        vol = C.volume_recorders(N, modX, modY, modZ)
+        vol = C.volume_recorders((Nx, Ny, Nz), modX, modY, modZ)
         outcoords = np.concatenate([outcoordsA, vol], axis=0)
     dmax = np.sqrt(((arr - dent) ** 2).sum(axis=1)).max() * dX
     duration = 1.84 * dmax / c0
@@ -178,22 +180,23 @@ def launch_outward(sim_dir, out_root, run_solver=False, write_maps=True, attenua
         fwio.writeVabs("int", modT, "modT")
         if recorder != "shell":            # modX/Y/Z absent -> solver skips the genout_mod volume dump
             fwio.writeVabs("int", modX, "modX", modY, "modY", modZ, "modZ")
-        launch_core(c0, omega0, N * dX, N * dX, N * dX, duration, p0, ppw, cfl,
+        launch_core(c0, omega0, Nx * dX, Ny * dX, Nz * dX, duration, p0, ppw, cfl,
                     c, rho, incoords, outcoords, nTic, write_maps=write_maps,
                     attenuation=use_atten, alpha_map=alpha_map, betaval=betaval)
         fwio.writeVabs("int", nTic, "nTic")
         fwio.writeVabs("int", 0, "ncoords_add")
         icmat = np.tile(icvec.astype(np.float32), (incoords.shape[0], 1))
         _write_icmat(icmat)
+        Nmax = int(max(Nx, Ny, Nz))            # scalar summary; == N for cubic runs (byte-identical)
         C.save_workspace("workspace.npz",
-                         scalars=dict(c0=c0, omega0=omega0, wX=N * dX, wY=N * dX, wZ=N * dX,
+                         scalars=dict(c0=c0, omega0=omega0, wX=Nx * dX, wY=Ny * dX, wZ=Nz * dX,
                                       duration=duration, p0=p0, ppw=ppw, cfl=cfl,
-                                      dX=dX, dY=dX, dZ=dX, N=N, dent=dent, attenuation=int(use_atten),
+                                      dX=dX, dY=dX, dZ=dX, N=Nmax, dent=dent, attenuation=int(use_atten),
                                       beta=betaval,
                                       modT=modT, modX=modX, modY=modY, modZ=modZ, nTic=nTic),
                          incoords=incoords, oc_array=outcoordsA,
-                         vol_params=(None if recorder == "shell" else (N, modX, modY, modZ)),
-                         medium=dict(kind="halle_c", file=c_file, N=N,
+                         vol_params=(None if recorder == "shell" else (Nx, modX, modY, modZ)),
+                         medium=dict(kind="halle_c", file=c_file, N=Nmax,
                                      rho_file=rho_file, alpha_file=alpha_file),
                          extra=shell_extra)
     finally:

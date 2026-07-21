@@ -95,14 +95,35 @@ def test_brain_center_from_registration_maps_mni_com():
     assert np.allclose(v, reg.mni_to_fullres(np.asarray(MNI_BRAIN_COM_MM, float)))
 
 
-def test_centered_pose_source_at_cube_center_identity_rotation():
+def test_centered_pose_source_at_brain_center_identity_rotation():
     spec = TransducerSpec.ctx500(f0_hz=1e6, ppw=6.0)
     c = _shell(N=90, center=(45, 40, 50))
     center_world = (np.eye(4) @ np.array([45, 40, 50, 1.0]))[:3]
     pose = _choose_pose_centered(c, np.eye(4), center_world, spec, surround_mm=10.0)
     assert np.allclose(pose.R_phys_to_grid, np.eye(3))            # omnidirectional: no rotation
-    assert np.allclose(pose.target_grid_vox, pose.N / 2.0)        # source at the cube center
-    assert pose.N % 2 == 0
+    assert all(s % 2 == 0 for s in pose.grid_shape())            # even dims per axis
+    # source planted at the brain-center voxel (maps back to the world center), strictly inside
+    # the box -- NOT pinned to the exact geometric center (bbox sizing + even rounding)
+    reg = Registration(pose.R_phys_to_grid, spec.dx_mm, pose.target_phys_mm, pose.target_grid_vox)
+    assert np.allclose(reg.mni_to_fullres(center_world), pose.target_grid_vox, atol=1e-6)
+    assert np.all(pose.target_grid_vox > 0)
+    assert np.all(pose.target_grid_vox < np.asarray(pose.grid_shape()))
+
+
+def test_centered_pose_bbox_tight_for_offcenter_brain_center():
+    """An off-center brain center must NOT blow the grid up to a source-centered cube: the
+    box tracks the head's own bbox (+surround), so the source sits off-center and the axis
+    is far smaller than 2*(center->far edge) would be."""
+    spec = TransducerSpec.ctx500(f0_hz=1e6, ppw=6.0)
+    c = _shell(N=90, center=(45, 40, 50), r_in=30, r_out=36)     # bone bbox spans vox 9..81 (eye affine)
+    offset_center = np.array([20.0, 40.0, 50.0])                 # pushed toward the low-x edge
+    pose = _choose_pose_centered(c, np.eye(4), offset_center, spec, surround_mm=10.0)
+    dx = spec.dx_mm
+    head_extent_x = (81 - 9) * 1.0                               # mm along x (eye affine)
+    Nx = pose.grid_shape()[0]
+    assert Nx * dx <= head_extent_x + 2 * 10.0 + 2 * dx          # tight: head bbox + surround, not 2x-cube
+    # source is off-center along x (near the low edge, ~surround in), not at Nx/2
+    assert pose.target_grid_vox[0] < Nx / 2.0 - 5
 
 
 def test_centered_pose_contains_whole_head_and_is_registration_consistent():
@@ -132,10 +153,12 @@ def test_build_brain_center_run_writes_centered_sim_tree(tmp_path):
     files = {p.name for p in out.iterdir()}
     assert {"c.f32", "array_coords.i32", "meta.json", "registration.json"} <= files
     meta = json.loads((out / "meta.json").read_text())
-    N = meta["N"]
-    assert np.allclose(meta["dent_grid"], [N / 2.0] * 3)         # source at the cube center
+    shape = np.asarray(meta["grid_shape"])                       # true (Nx,Ny,Nz) box
+    assert shape.shape == (3,) and np.all(shape % 2 == 0) and meta["N"] == int(shape.max())
+    dent = np.asarray(meta["dent_grid"])
+    assert np.all(dent > 0) and np.all(dent < shape)             # source (brain center) inside the box
     assert meta["n_array"] > 0                                   # whole-skull recording shell
     # registration anchors at the source (the brain center), non-MNI world frame preserved
     reg = Registration.from_json(out / "registration.json")
-    assert np.allclose(reg.target_fullres_voxel, [N / 2.0] * 3)
+    assert np.allclose(reg.target_fullres_voxel, dent)
     assert reg.world_frame == "subject_ras_mm"

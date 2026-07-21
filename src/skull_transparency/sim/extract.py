@@ -71,7 +71,7 @@ def _extract_shell(run_dir, out_dir, sim_dir, ws, meta, N, bone_threshold, c_bon
              Iint=Iint.astype(np.float32), Pmax=Pmax.astype(np.float32))
 
     c_file = meta.get("c_file", "halle_c.f32")
-    c = np.fromfile(sim_dir / c_file, dtype="<f4").reshape(N, N, N, order="F")
+    c = np.fromfile(sim_dir / c_file, dtype="<f4").reshape(*C.grid_shape(meta), order="F")
     np.save(out_dir / "skull_fullres_c.npy", c)
 
     target_fullres = np.asarray(meta["dent_grid"], float)
@@ -149,7 +149,7 @@ def extract_bundle(run_dir, out_dir, sim_dir, *, n_out=None, mod: int = MOD,
 
     # posed sound speed: c.f32 was written F-order by the producer (build_run_from_medium)
     c_file = meta.get("c_file", "halle_c.f32")
-    c = np.fromfile(sim_dir / c_file, dtype="<f4").reshape(N, N, N, order="F")
+    c = np.fromfile(sim_dir / c_file, dtype="<f4").reshape(*C.grid_shape(meta), order="F")
     np.save(out_dir / "skull_fullres_c.npy", c)
 
     target_fullres = np.asarray(meta["dent_grid"], float)

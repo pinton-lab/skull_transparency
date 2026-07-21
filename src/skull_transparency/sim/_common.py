@@ -34,6 +34,17 @@ def load_meta(sim_dir):
         return json.load(f)
 
 
+def grid_shape(meta):
+    """(Nx, Ny, Nz) interior grid dims. A brain-center run stores the true (possibly
+    non-cubic) box in ``meta['grid_shape']``; older/cubic runs only have the scalar
+    ``meta['N']`` -> ``(N, N, N)``."""
+    gs = meta.get("grid_shape")
+    if gs is not None:
+        return tuple(int(x) for x in gs)
+    N = int(meta["N"])
+    return (N, N, N)
+
+
 # ---- source / recorder geometry (column-major like MATLAB) -----------------
 
 def source_sphere(dent, rsrc=3):

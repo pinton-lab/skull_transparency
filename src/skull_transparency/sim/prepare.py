@@ -67,11 +67,17 @@ class Pose:
     """
     R_phys_to_grid: np.ndarray      # (3,3) orthonormal, world-mm -> grid-mm
     target_grid_vox: np.ndarray     # (3,) target voxel index (== meta['dent_grid'])
-    N: int                          # cubic grid size (the 48-voxel PAD is added later
-    #                                 by launch_core, not here)
+    N: int                          # scalar grid size (cubic runs); the 48-voxel absorbing
+    #                                 pad is added later by launch_core, not here
     target_phys_mm: np.ndarray | None = None   # (3,) world-frame anchor (== Registration
     #   target_mni_mm). With R + target_grid_vox + dx this fully defines the world<->grid
     #   map; required by `_resample_to_grid`. `_choose_pose` must set it.
+    shape: tuple | None = None      # (Nx,Ny,Nz) interior dims; None -> cubic (N,N,N). A
+    #   brain-center run sizes the box to the head bbox (non-cubic) instead of a source-
+    #   centered cube, cutting the voxel count (and RAM/GPU) several-fold.
+
+    def grid_shape(self) -> tuple:
+        return tuple(int(s) for s in (self.shape if self.shape is not None else (self.N,) * 3))
 
 
 def build_run_from_medium(c_map, affine, target_phys_mm, spec: TransducerSpec, out_sim_dir, *,
@@ -128,7 +134,7 @@ def build_run_from_medium(c_map, affine, target_phys_mm, spec: TransducerSpec, o
 
     # 3. recording surface (element coords on the skull-facing shell for this device)
     c_grid = np.fromfile(str(out_sim_dir / "c.f32"), dtype="<f4").reshape(
-        pose.N, pose.N, pose.N, order="F")
+        *pose.grid_shape(), order="F")
     arr = _recording_surface(c_grid, pose.target_grid_vox, spec, n=array_n_elements)
     _write_array_coords_i32(out_sim_dir / "array_coords.i32", arr)
 
@@ -182,7 +188,7 @@ def build_brain_center_run(c_map, affine, spec: TransducerSpec, out_sim_dir, *,
         _emit(alpha_map, "alpha.f32", 0.0)
 
     c_grid = np.fromfile(str(out_sim_dir / "c.f32"), dtype="<f4").reshape(
-        pose.N, pose.N, pose.N, order="F")
+        *pose.grid_shape(), order="F")
     # whole-skull recording shell (no window cap): max_angle_deg=180 keeps every patch,
     # so launch_outward's record length spans the farthest bone. The bone_threshold flows
     # through so a c-map whose bone is slower than 2200 m/s still resolves its calvarial
@@ -215,16 +221,18 @@ def write_run_descriptor(sim_dir, spec: TransducerSpec, pose: Pose, target_phys_
     """
     sim_dir = Path(sim_dir)
     sim_dir.mkdir(parents=True, exist_ok=True)
-    N = int(pose.N)
+    gshape = pose.grid_shape()
+    N = int(max(gshape))                                   # scalar summary (back-compat readers)
     tgt_vox = np.asarray(pose.target_grid_vox, float)
 
     meta = {
         "N": N,
+        "grid_shape": [int(s) for s in gshape],            # true (Nx,Ny,Nz) box (may be non-cubic)
         # grid + physics + transducer block come straight from the spec
         **spec.to_meta_fields(),
         "dent_grid": [float(x) for x in tgt_vox],          # outward source @ target
         "n_array": int(n_array),
-        "array_center": list(array_center) if array_center is not None else [N / 2.0] * 3,
+        "array_center": list(array_center) if array_center is not None else [s / 2.0 for s in gshape],
         "c_file": c_file,                                  # launchers read this, not "halle_c.f32"
         "rho_file": rho_file,                              # None -> rho_from_c(c)
         "alpha_file": alpha_file,                          # None -> c-porosity model
@@ -316,13 +324,15 @@ def _choose_pose(c_map, affine, target_phys_mm, approach, spec, standoff_mm, *,
 
 def _choose_pose_centered(c_map, affine, center_phys_mm, spec, *,
                           surround_mm: float = 25.0, bone_threshold: float = 2200.0) -> Pose:
-    """Centred, OMNIDIRECTIONAL seat for a brain-center run: the source sits at the cube
-    center and the cube is sized to hold the whole head plus ``surround_mm`` of coupling
-    medium on every side. No approach axis (the wave radiates in all directions), so the
-    rotation is identity (grid axes = world axes); the resample handles the affine.
+    """OMNIDIRECTIONAL seat for a brain-center run: the grid is sized to the head's own
+    world-axis-aligned bounding box plus ``surround_mm`` of coupling medium on every side,
+    and the source is planted at the brain-center voxel (NOT forced to the grid center).
+    No approach axis (the wave radiates in all directions), so the rotation is identity
+    (grid axes = world axes); the resample handles the affine.
 
-    The half-extent is read off the bone bounding-box corners mapped to world mm, so an
-    anisotropic head still gets a cube large enough on its longest axis."""
+    A box (not a source-centered cube) avoids ~9x voxel bloat: a source-centered cube is
+    sized to twice the largest brain-center->corner reach along the longest axis, whereas
+    an anisotropic head (e.g. tall skull + spine) fits a much smaller anisotropic box."""
     c = np.asarray(c_map)
     affine = np.asarray(affine, float)
     center = np.asarray(center_phys_mm, float)
@@ -335,12 +345,13 @@ def _choose_pose_centered(c_map, affine, center_phys_mm, spec, *,
     corners = np.array([[x, y, z] for x in (lo[0], hi[0]) for y in (lo[1], hi[1])
                         for z in (lo[2], hi[2])], float)
     cw = (affine @ np.c_[corners, np.ones(len(corners))].T).T[:, :3]   # bbox corners -> world mm
-    half = np.abs(cw - center).max(0)                                  # per-axis half-extent from center
-    reach_vox = int(np.ceil((half.max() + surround_mm) / dx_mm))
-    N = int(2 * reach_vox)                                             # even cube, source at the center
-    target_grid_vox = np.array([N / 2.0, N / 2.0, N / 2.0])
-    return Pose(R_phys_to_grid=np.eye(3), target_grid_vox=target_grid_vox, N=N,
-                target_phys_mm=center)
+    bbmin = cw.min(0) - surround_mm                                    # world-mm box + coupling margin
+    bbmax = cw.max(0) + surround_mm
+    shape = np.ceil((bbmax - bbmin) / dx_mm).astype(int)              # per-axis interior dims
+    shape = ((shape + 1) // 2) * 2                                     # even per axis
+    target_grid_vox = (center - bbmin) / dx_mm                        # brain-center source in the box
+    return Pose(R_phys_to_grid=np.eye(3), target_grid_vox=target_grid_vox,
+                N=int(shape.max()), target_phys_mm=center, shape=tuple(int(s) for s in shape))
 
 
 def _resample_to_grid(vol, affine, pose: Pose, dx_m, *, background=0.0, order=1) -> np.ndarray:
@@ -359,7 +370,6 @@ def _resample_to_grid(vol, affine, pose: Pose, dx_m, *, background=0.0, order=1)
                          "(the world-frame anchor; _choose_pose sets it).")
     vol = np.asarray(vol, np.float32)
     affine = np.asarray(affine, float)
-    N = int(pose.N)
     dx_mm = float(dx_m) * 1e3
     Rt = np.asarray(pose.R_phys_to_grid, float).T          # grid-mm -> world-mm
     tvox = np.asarray(pose.target_grid_vox, float)
@@ -370,7 +380,7 @@ def _resample_to_grid(vol, affine, pose: Pose, dx_m, *, background=0.0, order=1)
     # in_vox = inv3 @ (tmm + dx_mm*Rt@(g - tvox) - origin) = matrix @ g + offset
     matrix = inv3 @ (dx_mm * Rt)
     offset = inv3 @ (tmm - dx_mm * (Rt @ tvox) - origin)
-    out = affine_transform(vol, matrix, offset=offset, output_shape=(N, N, N),
+    out = affine_transform(vol, matrix, offset=offset, output_shape=pose.grid_shape(),
                            order=order, mode="constant", cval=float(background), prefilter=False)
     return out.astype(np.float32)
 
@@ -405,7 +415,6 @@ def _recording_surface(c_grid, target_grid_vox, spec: TransducerSpec, n=None, *,
     """
     from ..surface import extract_external_surface
     c_grid = np.asarray(c_grid)
-    N = c_grid.shape[0]
     tvox = np.asarray(target_grid_vox, float)
 
     surf, rhat = extract_external_surface(c_grid, tvox, bone_threshold=bone_threshold)
@@ -419,7 +428,7 @@ def _recording_surface(c_grid, target_grid_vox, spec: TransducerSpec, n=None, *,
                          "check `approach` points target->skin, or widen max_angle_deg.")
 
     pts = np.rint(surf + recorder_offset_vox * rhat).astype(np.int64)   # just outside bone
-    np.clip(pts, 0, N - 1, out=pts)
+    np.clip(pts, 0, np.asarray(c_grid.shape) - 1, out=pts)              # per-axis (grid may be non-cubic)
     pts = np.unique(pts, axis=0)
     pts = _grid_subsample(pts, max(1.0, float(spec.ppw) / 2.0))
     if n is not None and len(pts) > n:
