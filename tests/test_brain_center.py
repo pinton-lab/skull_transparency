@@ -126,6 +126,29 @@ def test_centered_pose_bbox_tight_for_offcenter_brain_center():
     assert pose.target_grid_vox[0] < Nx / 2.0 - 5
 
 
+def test_centered_pose_truncate_trims_inferior_tail_only():
+    """--truncate-mm cuts the long inferior tail (spine/mandible) along the S-I axis and
+    keeps the short (vault) side full; other axes are untouched."""
+    spec = TransducerSpec.ctx500(f0_hz=5e5, ppw=6.0)
+    N, Z = 90, 320
+    c = np.full((N, N, Z), 1540.0, np.float32)
+    c[42:48, 42:48, 20:300] = 2900.0                             # thin inferior "spine" tail (low z)
+    c[30:60, 30:60, 250:300] = 2900.0                            # "vault" cap near high z
+    affine = np.diag([0.5, 0.5, 0.5, 1.0])
+    center = (affine @ np.array([45, 45, 275, 1.0]))[:3]         # brain center near the vault
+    full = _choose_pose_centered(c, affine, center, spec, surround_mm=12.0)
+    trunc = _choose_pose_centered(c, affine, center, spec, surround_mm=12.0, truncate_mm=40.0, si_axis=2)
+    assert trunc.grid_shape()[2] < full.grid_shape()[2]          # S-I axis shrinks
+    assert trunc.grid_shape()[:2] == full.grid_shape()[:2]       # lateral/AP axes unchanged
+    # the box now extends at most truncate_mm + surround below the source on the S-I axis
+    below_mm = trunc.target_grid_vox[2] * spec.dx_mm
+    assert below_mm <= 40.0 + 12.0 + spec.dx_mm
+    # the full vault side above the source is preserved (source-to-top distance unchanged)
+    above_full = (full.grid_shape()[2] - full.target_grid_vox[2]) * spec.dx_mm
+    above_trunc = (trunc.grid_shape()[2] - trunc.target_grid_vox[2]) * spec.dx_mm
+    assert abs(above_full - above_trunc) <= 2 * spec.dx_mm
+
+
 def test_centered_pose_contains_whole_head_and_is_registration_consistent():
     spec = TransducerSpec.ctx500(f0_hz=1e6, ppw=6.0)
     c = _shell(N=90, center=(45, 40, 50), r_in=30, r_out=36)

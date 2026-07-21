@@ -152,6 +152,7 @@ def build_brain_center_run(c_map, affine, spec: TransducerSpec, out_sim_dir, *,
                            rho_map=None, alpha_map=None, input_frame: str = "ras_mm",
                            bone_threshold: float = 2200.0, atlas_com_mm=MNI_BRAIN_COM_MM,
                            center_phys_mm=None, surround_mm: float = 25.0,
+                           truncate_mm: float | None = None, si_axis: int = 2,
                            array_n_elements=None, attenuation: bool = False,
                            alpha_units: str = "db_mhz_cm"):
     """Brain-center variant of :func:`build_run_from_medium`: seat ONE omnidirectional
@@ -175,7 +176,8 @@ def build_brain_center_run(c_map, affine, spec: TransducerSpec, out_sim_dir, *,
     use_attenuation = bool(alpha_map is not None or attenuation)
 
     pose = _choose_pose_centered(c_map, affine, center_phys_mm, spec,
-                                 surround_mm=surround_mm, bone_threshold=bone_threshold)
+                                 surround_mm=surround_mm, bone_threshold=bone_threshold,
+                                 truncate_mm=truncate_mm, si_axis=si_axis)
 
     def _emit(vol, name, background):
         g = _resample_to_grid(vol, affine, pose, spec.dx_m, background=background)
@@ -323,7 +325,8 @@ def _choose_pose(c_map, affine, target_phys_mm, approach, spec, standoff_mm, *,
 
 
 def _choose_pose_centered(c_map, affine, center_phys_mm, spec, *,
-                          surround_mm: float = 25.0, bone_threshold: float = 2200.0) -> Pose:
+                          surround_mm: float = 25.0, bone_threshold: float = 2200.0,
+                          truncate_mm: float | None = None, si_axis: int = 2) -> Pose:
     """OMNIDIRECTIONAL seat for a brain-center run: the grid is sized to the head's own
     world-axis-aligned bounding box plus ``surround_mm`` of coupling medium on every side,
     and the source is planted at the brain-center voxel (NOT forced to the grid center).
@@ -332,7 +335,13 @@ def _choose_pose_centered(c_map, affine, center_phys_mm, spec, *,
 
     A box (not a source-centered cube) avoids ~9x voxel bloat: a source-centered cube is
     sized to twice the largest brain-center->corner reach along the longest axis, whereas
-    an anisotropic head (e.g. tall skull + spine) fits a much smaller anisotropic box."""
+    an anisotropic head (e.g. tall skull + spine) fits a much smaller anisotropic box.
+
+    ``truncate_mm`` (optional) trims the head along the inferior-superior axis ``si_axis``
+    (world +z superior by default) to at most ``truncate_mm`` on the longer side of the
+    source, cutting the spine/mandible tail that neither the vault windows nor the brain-
+    center field need. The short (vault) side is kept in full; a ``surround_mm`` water gap
+    is left below the cut. Off by default (whole head)."""
     c = np.asarray(c_map)
     affine = np.asarray(affine, float)
     center = np.asarray(center_phys_mm, float)
@@ -345,8 +354,15 @@ def _choose_pose_centered(c_map, affine, center_phys_mm, spec, *,
     corners = np.array([[x, y, z] for x in (lo[0], hi[0]) for y in (lo[1], hi[1])
                         for z in (lo[2], hi[2])], float)
     cw = (affine @ np.c_[corners, np.ones(len(corners))].T).T[:, :3]   # bbox corners -> world mm
-    bbmin = cw.min(0) - surround_mm                                    # world-mm box + coupling margin
-    bbmax = cw.max(0) + surround_mm
+    bone_lo, bone_hi = cw.min(0), cw.max(0)                            # world-mm bone bbox
+    bbmin = bone_lo - surround_mm                                      # + coupling margin
+    bbmax = bone_hi + surround_mm
+    if truncate_mm is not None:                                        # trim the spine/mandible tail
+        a = int(si_axis)
+        if (center[a] - bone_lo[a]) >= (bone_hi[a] - center[a]):       # longer tail below the source
+            bbmin[a] = max(bbmin[a], center[a] - float(truncate_mm) - surround_mm)
+        else:                                                         # longer tail above the source
+            bbmax[a] = min(bbmax[a], center[a] + float(truncate_mm) + surround_mm)
     shape = np.ceil((bbmax - bbmin) / dx_mm).astype(int)              # per-axis interior dims
     shape = ((shape + 1) // 2) * 2                                     # even per axis
     target_grid_vox = (center - bbmin) / dx_mm                        # brain-center source in the box

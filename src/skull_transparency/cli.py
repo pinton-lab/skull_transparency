@@ -97,6 +97,9 @@ def _cmd_prepare(args):
             bc_kwargs["center_phys_mm"] = _parse_vec(args.center_mm)  # explicit center (skip atlas/hole-fill)
         if args.surround_mm is not None:
             bc_kwargs["surround_mm"] = args.surround_mm               # water margin -> shrinks the grid/GPU memory
+        if args.truncate_mm is not None:
+            bc_kwargs["truncate_mm"] = args.truncate_mm               # trim spine/mandible tail along S-I
+            bc_kwargs["si_axis"] = args.si_axis
         out = build_brain_center_run(
             c, affine, spec, args.out, rho_map=rho, alpha_map=alpha,
             input_frame=args.input_frame, **bc_kwargs)
@@ -232,6 +235,13 @@ def build_parser():
         sp.add_argument("--surround-mm", type=float, default=None,
                         help="water margin around the head in mm; sizes the grid (smaller = less GPU "
                              "memory). Default 90 (targeted) / 25 (--center). Safe to lower to ~8-12.")
+        sp.add_argument("--truncate-mm", type=float, default=None,
+                        help="(--center) trim the head to at most this many mm on the longer inferior-"
+                             "superior side of the brain center, cutting the spine/mandible tail that "
+                             "the vault windows don't need (further shrinks the grid). Off = whole head.")
+        sp.add_argument("--si-axis", type=int, default=2,
+                        help="(--center, with --truncate-mm) world axis that is inferior-superior "
+                             "(default 2 = z, RAS/MNI convention).")
         sp.add_argument("--out", required=True, help="output sim-tree directory")
 
     sp = sub.add_parser("prepare", help="skull map -> sim tree (.dat solver inputs); no GPU")
