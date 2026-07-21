@@ -13,13 +13,15 @@ C0 = 1540.0     # m/s
 
 
 def integrate_outward(propmap, n_out, log=None):
-    """One streaming pass over outward frames -> (Iint, Pmax), both (nf,nf,nf) f8.
+    """One streaming pass over outward frames -> (Iint, Pmax), both the per-axis field
+    shape f8.
 
-    ``propmap`` is the (n_total, nf, nf, nf) field (memmap ok); frames [0, n_out)
-    are the outward (target -> skull) phase.  Iint = sum p^2, Pmax = max |p|."""
-    nf = propmap.shape[1]
-    Iint = np.zeros((nf, nf, nf), np.float64)
-    Pmax = np.zeros((nf, nf, nf), np.float64)
+    ``propmap`` is the (n_total, nfx, nfy, nfz) field (memmap ok; cubic for a targeted run,
+    non-cubic for a brain-center box); frames [0, n_out) are the outward (target -> skull)
+    phase.  Iint = sum p^2, Pmax = max |p|."""
+    shp = propmap.shape[1:]                # per-axis (nfx,nfy,nfz)
+    Iint = np.zeros(shp, np.float64)
+    Pmax = np.zeros(shp, np.float64)
     for t in range(int(n_out)):
         f = np.asarray(propmap[t], np.float64)
         Iint += f * f

@@ -36,14 +36,17 @@ SCHEMA = "skull_transparency.field_bundle/1"
 
 
 def _read_genout_mod(path, nXe, mod):
-    """``(nframes, nXe2, nYe2, nZe2)`` float32 from a (cubic) genout_mod dump. Uses the
-    fullwave2_ultra reader when importable, else the identical local reshape."""
+    """``(nframes, nXe2, nYe2, nZe2)`` float32 from a genout_mod dump. ``nXe`` is the padded
+    grid size per axis (scalar for a cubic grid, or an (nXe,nYe,nZe) tuple for a non-cubic
+    brain-center box). Uses the fullwave2_ultra reader when importable, else the identical
+    local reshape."""
+    nXx, nYy, nZz = (nXe, nXe, nXe) if np.isscalar(nXe) else nXe
     try:
         from fullwave2_ultra.io_dat import read_genout_mod
-        return read_genout_mod(str(path), nXe, nXe, nXe, mod, mod, mod)
+        return read_genout_mod(str(path), nXx, nYy, nZz, mod, mod, mod)
     except Exception:
-        n2 = (nXe + mod - 1) // mod
-        return np.fromfile(str(path), dtype="<f4").reshape(-1, n2, n2, n2)
+        c = lambda n: (n + mod - 1) // mod
+        return np.fromfile(str(path), dtype="<f4").reshape(-1, c(nXx), c(nYy), c(nZz))
 
 
 def _extract_shell(run_dir, out_dir, sim_dir, ws, meta, N, bone_threshold, c_bone) -> Path:
@@ -126,20 +129,21 @@ def extract_bundle(run_dir, out_dir, sim_dir, *, n_out=None, mod: int = MOD,
         if "x_recorder" in ws.files and str(ws["x_recorder"]) == "shell":
             return _extract_shell(run_dir, out_dir, sim_dir, ws, meta, N, bone_threshold, c_bone)
 
-    nf = len(range(0, N, mod))                         # == volume_recorders' per-axis count
-    nXe = N + 2 * PAD
+    gshape = C.grid_shape(meta)                        # (Nx,Ny,Nz); a brain-center box may be non-cubic
+    nf = tuple(len(range(0, n, mod)) for n in gshape)  # per-axis == volume_recorders' counts
+    nXe = tuple(n + 2 * PAD for n in gshape)
 
     gm = run_dir / "genout_mod.dat"
     if not gm.exists():
         raise FileNotFoundError(
             f"{gm} not found — extract needs the fullwave2-ultra solver's decimated full-field "
             "dump (run the solve with run_solver=True on a modX/Y/Z run).")
-    vol = _read_genout_mod(gm, nXe, mod)               # (nframes, nXe2, nXe2, nXe2)
+    vol = _read_genout_mod(gm, nXe, mod)               # (nframes, nXe2, nYe2, nZe2)
     lo = PAD // mod
-    propmap = vol[:, lo:lo + nf, lo:lo + nf, lo:lo + nf]   # crop pad -> interior (nframes,nf,nf,nf)
-    if propmap.shape[1:] != (nf, nf, nf):
-        raise ValueError(f"genout_mod interior crop is {propmap.shape[1:]}, expected {(nf, nf, nf)} "
-                         f"(grid N={N}, mod={mod}); check the solver's mod settings / grid size.")
+    propmap = vol[:, lo:lo + nf[0], lo:lo + nf[1], lo:lo + nf[2]]   # crop pad -> interior
+    if propmap.shape[1:] != nf:
+        raise ValueError(f"genout_mod interior crop is {propmap.shape[1:]}, expected {nf} "
+                         f"(grid {gshape}, mod={mod}); check the solver's mod settings / grid size.")
     nframes = propmap.shape[0]
     n_out = int(n_out) if n_out is not None else nframes
 
