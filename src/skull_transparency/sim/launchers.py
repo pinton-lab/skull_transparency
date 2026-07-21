@@ -88,9 +88,13 @@ def _maybe_run(outdir, sim_dir, run_solver, gpuid=None):
     if gpuid is not None:
         env["CUDA_VISIBLE_DEVICES"] = str(gpuid)
     status = subprocess.call([os.path.abspath(binary)], cwd=outdir, env=env)
-    if status == 0:
-        with open(os.path.join(outdir, "SUCCESS"), "w") as f:
-            f.write("ok\n")
+    if status != 0:
+        raise RuntimeError(
+            f"solver exited {status} (binary {binary}, cwd {outdir}) -- no output was written. "
+            "The solver's own error is printed above; common causes: GPU runtime off / not visible, "
+            "or CUDA out-of-memory (the whole skull at 6 PPW needs ~14 GB -- use an L4/A100 runtime).")
+    with open(os.path.join(outdir, "SUCCESS"), "w") as f:
+        f.write("ok\n")
     return status
 
 
