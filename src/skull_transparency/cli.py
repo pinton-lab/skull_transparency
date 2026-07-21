@@ -200,10 +200,13 @@ def _cmd_run(args):
         return rc
     o = args.out
     print("\nNext: run the (GPU) CUDA solve, extract a Field Bundle, then place it:\n"
-          f"  python -m skull_transparency.sim outward --sim {o} --out {o} --run\n"
+          f"  python -m skull_transparency.sim outward --sim {o} --out {o} --run --recorder shell\n"
           f"  skull-transparency extract --run {o}/outward --sim {o} --out {o}/bundle\n"
           f"  skull-transparency place --bundle {o}/bundle --out {o}/result\n"
-          "(the solve is GPU-bound; see README.)")
+          "(the solve is GPU-bound; see README.)\n"
+          "`--recorder shell` records only the calvarial surface (all a transparency map needs) ->\n"
+          "far less memory/disk; drop it for the full decimated volume field (`--recorder volume`,\n"
+          "the default) when you also need the interior field, e.g. focal-spot analysis.")
     return 0
 
 
