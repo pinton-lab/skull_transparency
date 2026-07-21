@@ -50,8 +50,11 @@ The shared `fullwave2_3d` helpers were ported into:
 * `extendMap3d` ≡ `numpy.pad(map, 48, mode='edge')` (48 = `nbdy(40)+M(8)`).
 * The medium maps are computed in float64 (`K = c²·rho`) and cast to float32
   only at write time — matching MATLAB's double maps + `fwrite('float')`.
-* The PML arrays the MATLAB function builds are only `plot`ted, never written,
-  so they are intentionally not reproduced (the solver builds its own PML).
+* Boundaries use the per-cell `Aexp` absorbing layer (`nbdy=40` thick), not PML;
+  the current solver kernels are the Aexp kernels. The legacy MATLAB PML arrays
+  (`apml*/bpml*`) are only `plot`ted, never written, and the Aexp kernels ignore
+  them, so they are intentionally not reproduced. ("PML pad" is a misnomer for
+  this absorbing-layer pad.)
 
 ## CLI
 

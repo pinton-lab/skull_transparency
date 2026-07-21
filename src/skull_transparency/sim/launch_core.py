@@ -6,10 +6,14 @@ launcher via :func:`writeVabs`).
 Constants baked in (every ``fullwave2_launch_*`` caller passes exactly these):
 ``Az = 0`` (the attenuation map ``A`` is extended but never written),
 ``Aex = 1`` everywhere, ``beta = 5.5`` everywhere. The boundary geometry is the
-solver default ``M = 8``, ``nbdy = 40`` → 48-voxel pad per side.
+solver default ``M = 8``, ``nbdy = 40`` → 48-voxel pad per side (an ``nbdy``-thick
+absorbing layer plus the ``M`` stencil halo), so ``nXe = N + 96``.
 
-The CUDA solver computes its own PML, so the ``apml*/bpml*`` arrays the MATLAB
-function builds (and only ``plot``s) are intentionally not reproduced.
+Boundaries are handled by the per-cell ``Aexp`` absorption map (``Aexp <= 1``,
+applied as ``field *= Aexp`` each step over the ``nbdy`` layer) -- the current
+solver kernels are the Aexp kernels, NOT PML. The legacy MATLAB ``apml*/bpml*``
+arrays are true-PML coefficients that these kernels ignore, so they are not
+reproduced. ("PML pad" elsewhere is a misnomer for this absorbing-layer pad.)
 """
 from __future__ import annotations
 

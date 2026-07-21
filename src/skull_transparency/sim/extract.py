@@ -5,7 +5,7 @@ The fullwave2-ultra solver streams the ``(modX,modY,modZ)``-decimated FULL (exte
 field to ``genout_mod.dat`` as ``(nframes, nXe2, nYe2, nZe2)`` (see the package's
 ``docs/io_contract.md`` / ``io_dat.read_genout_mod``). We:
 
-  1. read it and crop the 48-voxel PML/boundary pad to the interior ``N`` grid, giving
+  1. read it and crop the 48-voxel absorbing-layer pad to the interior ``N`` grid, giving
      the ``(n_total, nf, nf, nf)`` propagation field;
   2. time-integrate it (:func:`skull_transparency.metrics.integrate_outward`) to the
      cached ``outward_Iint``/``outward_Pmax`` ``(nf,nf,nf)`` volumes that
