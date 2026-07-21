@@ -95,6 +95,8 @@ def _cmd_prepare(args):
             bc_kwargs["bone_threshold"] = args.bone_threshold        # non-human/thin-bone speed
         if args.center_mm:
             bc_kwargs["center_phys_mm"] = _parse_vec(args.center_mm)  # explicit center (skip atlas/hole-fill)
+        if args.surround_mm is not None:
+            bc_kwargs["surround_mm"] = args.surround_mm               # water margin -> shrinks the grid/GPU memory
         out = build_brain_center_run(
             c, affine, spec, args.out, rho_map=rho, alpha_map=alpha,
             input_frame=args.input_frame, **bc_kwargs)
@@ -109,7 +111,8 @@ def _cmd_prepare(args):
     out = build_run_from_medium(
         c, affine, target, spec, args.out, rho_map=rho, alpha_map=alpha,
         input_frame=args.input_frame, approach=approach,
-        standoff_mm=args.standoff_mm, surround_mm=args.surround_mm)
+        standoff_mm=args.standoff_mm,
+        surround_mm=(90.0 if args.surround_mm is None else args.surround_mm))
     print(f"wrote sim tree {out}  (now run the solver, then `place` the bundle)")
     return 0
 
@@ -226,7 +229,9 @@ def build_parser():
         sp.add_argument("--approach", help="aim unit vector target->skin, 'x,y,z' (required until auto)")
         sp.add_argument("--input-frame", default="ras_mm", help="provenance label for the world frame")
         sp.add_argument("--standoff-mm", type=float, default=20.0)
-        sp.add_argument("--surround-mm", type=float, default=90.0)
+        sp.add_argument("--surround-mm", type=float, default=None,
+                        help="water margin around the head in mm; sizes the grid (smaller = less GPU "
+                             "memory). Default 90 (targeted) / 25 (--center). Safe to lower to ~8-12.")
         sp.add_argument("--out", required=True, help="output sim-tree directory")
 
     sp = sub.add_parser("prepare", help="skull map -> sim tree (.dat solver inputs); no GPU")
