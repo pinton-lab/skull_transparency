@@ -42,8 +42,28 @@ pdct   = st.to_placement_dict(pl, target_name="dentate_left")   # placement.json
 Always read the output dict's `frame` key (`nrrd_voxel_mm` with tuba, else `mni_ras_mm`). See
 `examples/halle_dentate/` for the full pipeline, `examples/brain_center/run_brain_center.py` for the
 neutral whole-skull baseline, and `examples/synthetic/run_synthetic.py` for a no-GPU/no-data smoke
-test. The CLI (`skull-transparency prepare | extract | place | position | transparency`), the full
-API, and the method are all in **[`tutorial/tutorial.pdf`](tutorial/tutorial.pdf)**.
+test. The CLI (`skull-transparency prepare | extract | place | position | transparency | explore |
+report`), the full API, and the method are all in **[`tutorial/tutorial.pdf`](tutorial/tutorial.pdf)**.
+
+## On your own computer, without a GPU
+
+The GPU is only needed to *mint* a map; exploring one is laptop-fast. Precomputed maps for the
+ITRUSST benchmark skull (500 kHz, one per named MNI target) live in the **gallery** — fetch one by
+name and place a transducer on it interactively:
+
+```bash
+pip install 'skull-transparency[viz]'
+skull-transparency explore --list-targets           # what's precomputed
+skull-transparency explore --target dACC_left       # fetch + open in napari (3-D)
+skull-transparency report  --target dACC_left --out dacc.html   # self-contained HTML report
+```
+
+`explore`/`report` also take `--bundle DIR` for a map you computed yourself (locally on a CUDA GPU,
+or with the [Colab notebook](notebooks/skull_transparency_colab_500kHz.ipynb) — download its
+`run/bundle`). The package is also a **napari plugin**: bundle directories and `*.skullbundle.zip`
+files open straight from *File ▸ Open*, and the *Transparency explorer* widget picks gallery
+targets from a menu. Platform notes (Linux / Windows-WSL2 / macOS) are in
+[`docs/desktop.md`](docs/desktop.md).
 
 For a **neutral whole-skull** view independent of any one target, run a brain-center baseline:
 `skull-transparency prepare --center …` seats one omnidirectional source at the brain center, and

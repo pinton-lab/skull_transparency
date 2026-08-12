@@ -33,8 +33,14 @@ solver = ["fullwave2-ultra"]   # GPU preflight + binary resolution for run_solve
 [project.scripts]
 skull-transparency = "skull_transparency.cli:main"
 
+[project.entry-points."napari.manifest"]
+skull-transparency = "skull_transparency:napari.yaml"
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+skull_transparency = ["napari.yaml", "gallery_registry.json"]
 
 [tool.uv.sources]
 # Resolved from their pinton-lab GitHub repos (not on PyPI). For local co-development

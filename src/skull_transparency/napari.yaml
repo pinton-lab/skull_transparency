@@ -1,0 +1,17 @@
+name: skull-transparency
+display_name: Skull Transparency
+contributions:
+  commands:
+    - id: skull-transparency.get_reader
+      title: Open skull-transparency Field Bundle
+      python_name: skull_transparency.napari_plugin:napari_get_reader
+    - id: skull-transparency.explore_widget
+      title: Transparency gallery explorer
+      python_name: skull_transparency.napari_plugin:explore_widget
+  readers:
+    - command: skull-transparency.get_reader
+      filename_patterns: ['*.skullbundle.zip', '*bundle.json']
+      accepts_directories: true
+  widgets:
+    - command: skull-transparency.explore_widget
+      display_name: Transparency explorer
