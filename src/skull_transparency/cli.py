@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -259,6 +260,54 @@ def _cmd_report(args):
     return 0
 
 
+def _cmd_compute(args):
+    """One command from a target to an explorable bundle: build the ITRUSST medium,
+    prepare, run the GPU solve (fetching the solver behind its license gate if needed),
+    extract. The GPU-bound step of the two-product split."""
+    import subprocess
+    import skull_transparency as st
+    from .atlas_targets import target_mni
+    from .itrusst import build_medium
+    from .sim.extract import extract_bundle
+    from .sim.prepare import build_brain_center_run
+    from .solver_fetch import ensure_solver
+
+    if args.target_mm:
+        tgt = _parse_vec(args.target_mm)
+        name = args.name or "custom"
+    else:
+        tgt = target_mni(args.target)
+        name = args.target
+    solver = ensure_solver(accept_license=args.accept_license)
+
+    out = Path(args.out or f"run_{name}")
+    print(f"[compute] target {name} @ MNI ({tgt[0]:.0f}, {tgt[1]:.0f}, {tgt[2]:.0f}) mm "
+          f"-> {out}")
+    c, affine = build_medium(ppw=args.ppw)
+    spec = _load_transducer(args.transducer) if args.transducer else None
+    if spec is None:
+        from .transducer_spec import TransducerSpec
+        spec = TransducerSpec.ctx500(f0_hz=500e3, ppw=args.ppw)
+    trunc = None if args.z_floor is None else float(tgt[2]) - args.z_floor
+    build_brain_center_run(c, affine, spec, out, center_phys_mm=tgt,
+                           surround_mm=args.surround_mm, truncate_mm=trunc)
+
+    print(f"[compute] solving on GPU {args.gpu} (solver: {solver}) ...")
+    env = dict(os.environ, FULLWAVE2_BIN=solver, CUDA_VISIBLE_DEVICES=str(args.gpu))
+    r = subprocess.run([sys.executable, "-m", "skull_transparency.sim", "outward",
+                        "--sim", str(out), "--out", str(out), "--run",
+                        "--recorder", "shell"], env=env)
+    if r.returncode != 0:
+        raise SystemExit(f"solve failed (exit {r.returncode}) -- see the solver output "
+                         "above; common causes: no NVIDIA GPU visible, or too little GPU "
+                         "memory (lower --surround-mm).")
+    bundle = extract_bundle(out / "outward", out / "bundle", out)
+    print(f"[compute] Field Bundle: {bundle}")
+    print(f"next:  skull-transparency explore --bundle {bundle}\n"
+          f"       skull-transparency report  --bundle {bundle} --out {name}.html")
+    return 0
+
+
 def _cmd_run(args):
     rc = _cmd_prepare(args)
     if rc:
@@ -384,13 +433,33 @@ def build_parser():
     sp.add_argument("--out", default="placement_report.html")
     sp.add_argument("--title", default=None)
     sp.set_defaults(func=_cmd_report)
+
+    sp = sub.add_parser("compute",
+                        help="one command from a target to an explorable bundle on the "
+                             "ITRUSST skull: prepare + GPU solve + extract (needs an "
+                             "NVIDIA GPU; fetches the solver on first use)")
+    g = sp.add_mutually_exclusive_group(required=True)
+    g.add_argument("--target", help="named MNI target (see explore --list-targets)")
+    g.add_argument("--target-mm", help="explicit MNI RAS target 'x,y,z' (mm)")
+    sp.add_argument("--name", help="label for --target-mm runs (default 'custom')")
+    sp.add_argument("--out", default=None, help="run directory (default run_<name>)")
+    sp.add_argument("--ppw", type=int, default=6)
+    sp.add_argument("--surround-mm", type=float, default=12.0)
+    sp.add_argument("--z-floor", type=float, default=-65.0,
+                    help="keep skull above this world-z (mm); None-like: pass a very "
+                         "negative value for the whole head")
+    sp.add_argument("--gpu", type=int, default=0)
+    sp.add_argument("--transducer", help="TransducerSpec JSON (default: CTX-500 at 500 kHz)")
+    sp.add_argument("--accept-license", action="store_true",
+                    help="accept the solver binary's license non-interactively")
+    sp.set_defaults(func=_cmd_compute)
     return p
 
 
 # Coordinate-valued options whose value can start with a minus (left-hemisphere x,
 # inferior z ...). argparse reads a space-separated leading-minus value as a new option
 # flag ("--center-mm: expected one argument"), so merge OPT VALUE into OPT=VALUE.
-_COORD_OPTS = ("--target", "--center-mm")
+_COORD_OPTS = ("--target", "--center-mm", "--target-mm")
 
 
 def _merge_coord_args(argv):

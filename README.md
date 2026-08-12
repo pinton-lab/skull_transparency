@@ -58,9 +58,12 @@ skull-transparency explore --target dACC_left       # fetch + open in napari (3-
 skull-transparency report  --target dACC_left --out dacc.html   # self-contained HTML report
 ```
 
-`explore`/`report` also take `--bundle DIR` for a map you computed yourself (locally on a CUDA GPU,
-or with the [Colab notebook](notebooks/skull_transparency_colab_500kHz.ipynb) — download its
-`run/bundle`). The package is also a **napari plugin**: bundle directories and `*.skullbundle.zip`
+`explore`/`report` also take `--bundle DIR` for a map you computed yourself. On a Linux/NVIDIA
+machine (or WSL2), **one command mints a new map** — it fetches the solver on first use behind its
+license prompt: `skull-transparency compute --target dACC_left` (any MNI point via
+`--target-mm x,y,z`). No GPU anywhere? The [Colab
+notebook](notebooks/skull_transparency_colab_500kHz.ipynb) computes the same bundle on a free T4 —
+download its `run/bundle`. The package is also a **napari plugin**: bundle directories and `*.skullbundle.zip`
 files open straight from *File ▸ Open*, and the *Transparency explorer* widget picks gallery
 targets from a menu. Platform notes (Linux / Windows-WSL2 / macOS) are in
 [`docs/desktop.md`](docs/desktop.md).

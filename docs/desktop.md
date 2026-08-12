@@ -25,9 +25,37 @@ pip install 'skull-transparency[viz]'    # explorer + napari + matplotlib
 ```
 
 The base package (`pip install skull-transparency`) is numpy/scipy only and covers the
-scripting API and `report`. The CUDA solver binary is **not** bundled: computing new maps
-fetches it from the `fullwave2-ultra` distribution (its noncommercial license is shown at
-that point), or you point `FULLWAVE2_BIN` at a copy.
+scripting API and `report`. The CUDA solver binary is **not** bundled: `compute` fetches
+it on first use and shows its (noncommercial) license, which must be accepted before
+anything is installed — or point `FULLWAVE2_BIN` at a copy you already have.
+
+## Compute your own map (GPU)
+
+On a Linux box with an NVIDIA GPU (Windows: inside WSL2), one command goes from a target
+to an explorable bundle — build the ITRUSST medium, prepare, solve, extract:
+
+```bash
+pip install 'skull-transparency[compute]'          # + trimesh (STL rasterization)
+skull-transparency compute --target dACC_left --accept-license      # named target
+skull-transparency compute --target-mm -44,-67,2 --name V5_left     # any MNI point
+skull-transparency explore --bundle run_dACC_left/bundle
+```
+
+First run fetches the solver (license gate) and the benchmark skull meshes, then caches
+both; after that a 500 kHz 6-PPW map takes a few minutes end to end (~6 GB GPU). Use
+`--target-mm x,y,z --name <label>` for any MNI coordinate that is not in the named
+dictionary, `--gpu N` to pick a device, and `--surround-mm` if memory is tight.
+
+### Docker (lab GPU boxes)
+
+The repository ships a `Dockerfile` for a ready-to-run container (the solver is fetched
+at first `compute`, so the image itself stays license-clean):
+
+```bash
+docker build -t skull-transparency .
+docker run --gpus all -v "$PWD:/work" -w /work skull-transparency \
+    compute --target dACC_left --accept-license
+```
 
 ## The precomputed gallery (no GPU at all)
 
