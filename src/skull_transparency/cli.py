@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -298,8 +299,29 @@ def build_parser():
     return p
 
 
+# Coordinate-valued options whose value can start with a minus (left-hemisphere x,
+# inferior z ...). argparse reads a space-separated leading-minus value as a new option
+# flag ("--center-mm: expected one argument"), so merge OPT VALUE into OPT=VALUE.
+_COORD_OPTS = ("--target", "--center-mm")
+
+
+def _merge_coord_args(argv):
+    out, i = [], 0
+    while i < len(argv):
+        a = argv[i]
+        if (a in _COORD_OPTS and i + 1 < len(argv)
+                and re.match(r"^-[\d.]", argv[i + 1])):   # looks like a negative coordinate
+            out.append(a + "=" + argv[i + 1])
+            i += 2
+        else:
+            out.append(a)
+            i += 1
+    return out
+
+
 def main(argv=None):
-    args = build_parser().parse_args(sys.argv[1:] if argv is None else argv)
+    argv = _merge_coord_args(sys.argv[1:] if argv is None else list(argv))
+    args = build_parser().parse_args(argv)
     return args.func(args)
 
 

@@ -58,3 +58,24 @@ def test_load_transducer_missing_file_errors():
     # not a confusing json.loads failure on the path string itself.
     with pytest.raises(SystemExit):
         cli._load_transducer("does_not_exist.json")
+
+
+def test_leading_minus_coordinates_parse():
+    # 'OPT -4,24,28' (space form): argparse reads the leading-minus value as a new flag;
+    # _merge_coord_args folds it into the immune 'OPT=-4,24,28' form so both spellings work.
+    argv = cli._merge_coord_args(["prepare", "--c-map", "c.npy", "--center",
+                                  "--center-mm", "-4.00,24.00,28.00",
+                                  "--transducer", "t.json", "--out", "run"])
+    args = cli.build_parser().parse_args(argv)
+    assert args.center_mm == "-4.00,24.00,28.00"
+
+    argv = cli._merge_coord_args(["prepare", "--c-map", "c.npy",
+                                  "--target", "-12,-57,-34", "--approach", "0,0,1",
+                                  "--transducer", "t.json", "--out", "run"])
+    args = cli.build_parser().parse_args(argv)
+    assert args.target == "-12,-57,-34"
+
+    # a genuinely missing value (next token is another flag) must still error, not merge
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(cli._merge_coord_args(
+            ["prepare", "--c-map", "c.npy", "--center-mm", "--transducer", "t.json"]))
