@@ -6,6 +6,14 @@
 # (Aexp.dat / c.dat / icmat.dat ≈ 2 GB each.) Reproduced via REPRODUCE.md.
 runs/
 
+# Same class of output, but written BESIDE runs/ rather than inside it
+# (2.2 GB as of 2026-08-11: rho.f32 / c.f32 are 417 MB each).
+*_run/
+*_run_v2/
+*_ppw[0-9]*/
+*.f32
+*.i32
+
 # Manuscript kept out of this repo (lives/builds elsewhere). Excluding the
 # directory also sweeps the ~50 MB compiled PDFs, 53 MB of figs, and the
 # historical *.tex / *.bak backups in one rule.
