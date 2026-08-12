@@ -45,6 +45,11 @@ def main(argv=None):
     p.add_argument("--srcdir", default=None)
     p.add_argument("--arrfile", default=None)
     p.add_argument("--target-vox", default=None)
+    p.add_argument("--focus-vox", default=None,
+                   help="(forward_focus) focus point in fullres voxel coords 'X,Y,Z' "
+                        "(default: outward target); geo/flat steer here, tr stays at target")
+    p.add_argument("--src", default=None,
+                   help="(forward_focus) source/outward dir (default <out>/outward)")
     p.add_argument("--gpuid", default="0")
     p.add_argument("--run", action="store_true", help="invoke the CUDA solver")
     p.add_argument("--dirs", nargs="*", default=None, help="(verify) subdirs to check")
@@ -62,7 +67,10 @@ def main(argv=None):
         sys.exit(rc)
 
     tv = _parse_vox(a.target_vox) if a.target_vox else None
+    fv = _parse_vox(a.focus_vox) if a.focus_vox else None
     dispatch = {
+        "forward_focus": lambda: L.launch_forward_focus(sim, out, focus_vox=fv, mode=a.mode,
+            outsub=a.outsub, src_dir=a.src, selfile=a.selfile, run_solver=run, gpuid=a.gpuid),
         "outward": lambda: L.launch_outward(sim, out, run_solver=run),
         "inward": lambda: L.launch_inward(sim, out, run_solver=run),
         "inward_windowed": lambda: L.launch_inward_windowed(sim, out, run_solver=run),

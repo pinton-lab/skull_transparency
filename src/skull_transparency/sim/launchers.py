@@ -463,9 +463,22 @@ def launch_inward_focalbox(sim_dir, out_root, run_solver=False, write_maps=True,
 # ============================================================================
 
 def _subset_focalbox(sim_dir, out_root, src_dir, tr_dir, selfile, mode, write_nAo,
-                     run_solver=False, gpuid="0", write_maps=True, reuse_maps=True):
+                     run_solver=False, gpuid="0", write_maps=True, reuse_maps=True,
+                     focus_vox=None, sel_idx=None, vol_mod=1):
     """Shared body for the three subset focal-box launchers. ``src_dir`` holds
-    the source workspace+genout; results go to ``tr_dir``."""
+    the source workspace+genout; results go to ``tr_dir``.
+
+    ``vol_mod`` decimates the solver's full-field volume dump ``genout_mod.dat`` (modX=modY=modZ).
+    The focal box is recorded via the coord output ``genout.dat`` (independent of this), so the
+    volume dump is UNUSED by ``extract_focal`` — keep ``vol_mod`` large (e.g. 8) for focus runs to
+    avoid writing a ~100 GB full-res ``genout_mod.dat``. Default 1 preserves the legacy subset
+    launchers (which intentionally want the full-res volume).
+
+    ``focus_vox`` (3,) fullres voxel coords STEERS the geometric/flat focus + the focal-box
+    recorder to an arbitrary point (default: the outward source ``dent``). ``tr`` mode cannot
+    steer off ``dent`` (it time-reverses a point-source-at-T recording) — a non-trivial
+    ``focus_vox`` there is rejected. ``sel_idx`` (0-based indices into the aperture) overrides
+    ``selfile``; pass ``np.arange(nA)`` for the full aperture."""
     src_dir = os.path.abspath(src_dir)
     ws, s, cmap, rho, alpha, oc = _load_src(src_dir, sim_dir)
     c0 = float(s["c0"]); omega0 = float(s["omega0"]); p0 = float(s["p0"])
@@ -473,11 +486,20 @@ def _subset_focalbox(sim_dir, out_root, src_dir, tr_dir, selfile, mode, write_nA
     wX = float(s["wX"]); wY = float(s["wY"]); wZ = float(s["wZ"])
     dX = float(s["dX"]); N = np.atleast_1d(np.asarray(s["N"], dtype=np.int64))
     dent = np.asarray(s["dent"], dtype=np.float64).ravel()
+    foc = dent if focus_vox is None else np.asarray(focus_vox, dtype=np.float64).ravel()
+    if mode == "tr" and not np.allclose(foc, dent):
+        raise ValueError("tr drive cannot steer off the outward source point "
+                         f"(dent={dent}); use mode='geo'/'flat' to focus at {foc}.")
     dT = dX / c0 * cfl; dt2 = modT * dT; lambda_t = 1.0 / (omega0 / 2 / np.pi)
     ncoordsout = oc.shape[0]
     idc_ap = np.where(oc[:, 4] == 1)[0]; nA = idc_ap.size
 
-    sel = np.fromfile(selfile, dtype="<i4").ravel()          # 0-based
+    if sel_idx is not None:
+        sel = np.asarray(sel_idx, dtype=np.int64).ravel()
+    elif selfile is not None:
+        sel = np.fromfile(selfile, dtype="<i4").ravel()      # 0-based
+    else:
+        sel = np.arange(nA, dtype=np.int64)                  # full aperture
     nS = sel.size
     rows = idc_ap[sel]
 
@@ -497,12 +519,12 @@ def _subset_focalbox(sim_dir, out_root, src_dir, tr_dir, selfile, mode, write_nA
         duration = 1.4 * b * dt2
     elif mode == "flat":                       # zero-phase: every element fires in phase (no delay)
         arr_sel = oc[rows, 0:3]
-        d_i = np.sqrt(((arr_sel - dent) ** 2).sum(axis=1)) * dX
+        d_i = np.sqrt(((arr_sel - foc) ** 2).sum(axis=1)) * dX
         icmat = np.tile(p_unit, (nS, 1)) * p0   # (nS, npn), all rows == the unit pulse, no shift
         duration = 1.4 * d_i.max() / c0
     else:  # geo
         arr_sel = oc[rows, 0:3]
-        d_i = np.sqrt(((arr_sel - dent) ** 2).sum(axis=1)) * dX
+        d_i = np.sqrt(((arr_sel - foc) ** 2).sum(axis=1)) * dX
         tau_fire = (d_i.max() - d_i) / c0
         shift = matlab_round(tau_fire / dT).astype(np.int64)
         nTic_g = int(shift.max()) + npn
@@ -524,19 +546,19 @@ def _subset_focalbox(sim_dir, out_root, src_dir, tr_dir, selfile, mode, write_nA
         icmat = (icmat * np.sqrt(E_target / Ecur)).astype(np.float32)
     nTic = icmat.shape[1]
 
-    box = C.focal_box(dent, N, 36)
+    box = C.focal_box(foc, N, 36)
     tr_incoords = oc[rows, :]
     tr_outcoords = np.concatenate([oc[rows, :], box], axis=0)
 
     outdir = _chdir(tr_dir)
     from scipy.io import savemat
     savemat(os.path.join(outdir, "box_info.mat"),
-            dict(box=box[:, :3], dent=dent.reshape(1, -1), fb=36, dt2=dt2, dX=dX,
-                 modT=modT, duration=duration, sel=(sel + 1).reshape(1, -1),
-                 MODE=mode, N=N.reshape(1, -1)))
+            dict(box=box[:, :3], dent=dent.reshape(1, -1), focus=foc.reshape(1, -1),
+                 fb=36, dt2=dt2, dX=dX, modT=modT, duration=duration, p0=p0, nS=nS,
+                 sel=(sel + 1).reshape(1, -1), MODE=mode, N=N.reshape(1, -1)))
     cwd = os.getcwd(); os.chdir(outdir)
     try:
-        fwio.writeVabs("int", modT, "modT", 1, "modX", 1, "modY", 1, "modZ")
+        fwio.writeVabs("int", modT, "modT", int(vol_mod), "modX", int(vol_mod), "modY", int(vol_mod), "modZ")
         launch_core(c0, omega0, wX, wY, wZ, duration, p0, ppw, cfl,
                     cmap, rho, tr_incoords, tr_outcoords, nTic, write_maps=write_maps,
                     reuse_maps_from=src_dir if reuse_maps else None, attenuation=_src_atten(s),
@@ -590,3 +612,24 @@ def launch_skullonly_target_focalbox(sim_dir, out_root, srcdir, selfile, mode="t
     return _subset_focalbox(sim_dir, out_root, src_dir, os.path.join(src_dir, outsub),
                             selfile, mode, write_nAo=False, run_solver=run_solver,
                             gpuid=gpuid, write_maps=write_maps)
+
+
+def launch_forward_focus(sim_dir, out_root, focus_vox=None, mode="geo", outsub=None,
+                         src_dir=None, selfile=None, sel_idx=None, run_solver=False,
+                         gpuid="0", write_maps=True, reuse_maps=True, vol_mod=8):
+    """FORWARD focusing solve at an ARBITRARY focus point (the focus-depth chooser backend).
+
+    Drives the outward run's aperture (full aperture by default; a ``selfile``/``sel_idx`` subset
+    for the actual sparse array) with focusing delays to ``focus_vox`` (fullres voxel; default the
+    outward target ``dent``) and records a fine focal box centered there → ``<out_root>/<outsub>/``
+    with ``box_info.mat`` + (after ``--run``) ``genout.dat``. ``mode='geo'`` (geometric, steerable,
+    skull-UNcorrected) is the default for off-target depths; ``mode='tr'`` (skull-CORRECTED) is only
+    valid at the target. Reuses the outward medium maps (no re-prepare)."""
+    if src_dir is None:
+        src_dir = os.path.join(out_root, "outward")
+    if outsub is None:
+        outsub = "focus_" + mode
+    return _subset_focalbox(sim_dir, out_root, src_dir, os.path.join(out_root, outsub),
+                            selfile, mode, write_nAo=True, run_solver=run_solver, gpuid=gpuid,
+                            write_maps=write_maps, reuse_maps=reuse_maps,
+                            focus_vox=focus_vox, sel_idx=sel_idx, vol_mod=vol_mod)
