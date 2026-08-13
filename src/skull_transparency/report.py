@@ -250,6 +250,85 @@ def _unwrap_panel(u, field, vlim, cmap, title, clabel, contour_at=None):
     return fig
 
 
+def _scene3d_figure(tmap, placement, bowl_radius_mm):
+    """The placement as a 3-D scene, manuscript Figs. 1 and 8 style: semi-transparent
+    skull, the transducer bowl surface seated at its pose, the beam axis, and the target
+    marked inside the head. Two views: down the beam axis, and side-on to it."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+
+    P = np.asarray(tmap.surf_mni_mm() if tmap.registration is not None else tmap.surf_vox,
+                   float)
+    if len(P) > 60000:                                       # translucency needs few, dim points
+        P = P[np.random.default_rng(0).permutation(len(P))[:60000]]
+    tgt = np.asarray(placement.target_mni_mm, float)
+    apex = np.asarray(placement.apex_mni_mm, float)
+    win = np.asarray(placement.window_center_mni_mm, float)
+
+    # bowl cap surface: sphere of radius ROC about the FOCUS (= the target when the apex
+    # sits one focal length out), within the aperture half-angle around the beam axis
+    n = apex - tgt
+    roc = float(np.linalg.norm(n)) or 1.0
+    n = n / roc
+    half = float(np.arcsin(np.clip(bowl_radius_mm / roc, 0.0, 1.0)))
+    e1 = np.cross(n, [0.0, 0.0, 1.0])
+    if np.linalg.norm(e1) < 0.2:
+        e1 = np.cross(n, [0.0, 1.0, 0.0])
+    e1 /= np.linalg.norm(e1)
+    e2 = np.cross(n, e1)
+    k = np.arange(2400)
+    costh = 1.0 - (1.0 - np.cos(half)) * (k + 0.5) / len(k)
+    sinth = np.sqrt(1.0 - costh ** 2)
+    phi = k * 2.399963229728653                              # golden angle
+    dirs = (costh[:, None] * n[None, :]
+            + sinth[:, None] * (np.cos(phi)[:, None] * e1[None, :]
+                                + np.sin(phi)[:, None] * e2[None, :]))
+    cap = tgt + roc * dirs
+
+    # target region: a small sphere marker (NOT a predicted focal volume)
+    uu, vv = np.meshgrid(np.linspace(0, 2 * np.pi, 24), np.linspace(0, np.pi, 12))
+    r_t = 5.0
+    sx = tgt[0] + r_t * np.cos(uu) * np.sin(vv)
+    sy = tgt[1] + r_t * np.sin(uu) * np.sin(vv)
+    sz = tgt[2] + r_t * np.cos(vv)
+
+    az0 = float(np.degrees(np.arctan2(n[1], n[0])))
+    el0 = float(np.clip(np.degrees(np.arcsin(np.clip(n[2], -1, 1))), -60, 60))
+    views = [("down the beam axis", el0, az0), ("side-on", 15.0, az0 + 90.0)]
+
+    fig = plt.figure(figsize=(12.5, 5.8))
+    for kview, (vname, el, az) in enumerate(views):
+        ax = fig.add_subplot(1, 2, kview + 1, projection="3d")
+        ax.computed_zorder = False
+        ax.scatter(*P.T, c="#9aa2ad", s=1.5, alpha=0.05, linewidths=0, zorder=1)
+        ax.plot_surface(sx, sy, sz, color="#2ca02c", alpha=0.45, linewidth=0, zorder=2)
+        ext = tgt - 0.25 * roc * n
+        ax.plot(*np.c_[apex, ext], color="#2ca02c", ls="--", lw=1.5, zorder=3)
+        ax.scatter(*cap.T, c="#00b7c7", s=5, linewidths=0, alpha=0.9, zorder=4,
+                   label="transducer")
+        ax.scatter(*win, marker="*", s=180, c="red", edgecolors="k", linewidths=0.6,
+                   zorder=5, label="window")
+        ax.view_init(elev=el, azim=az)
+        ax.set_box_aspect((1, 1, 1))
+        lo, hi = P.min(0), P.max(0)
+        mid, sp = (hi + lo) / 2, (hi - lo).max() / 2 * 1.12   # margin so the bowl fits
+        for kk, mm in zip("xyz", mid):
+            getattr(ax, f"set_{kk}lim")(mm - sp, mm + sp)
+        for pane in (ax.xaxis, ax.yaxis, ax.zaxis):
+            pane.set_ticklabels([])
+            pane.pane.set_facecolor((1, 1, 1, 0))
+        ax.grid(False)
+        ax.set_title(vname, fontsize=10)
+        if kview == 0:
+            ax.legend(fontsize=8, loc="upper left")
+    fig.suptitle("Placement scene — transducer on the skull, target in the head "
+                 "(semi-transparent; green sphere = target marker, not a focal volume)",
+                 fontsize=11)
+    return fig
+
+
 def _map3d_figure(tmap):
     """The transparency map on the skull surface from four culled viewpoints."""
     import matplotlib
@@ -315,6 +394,7 @@ def write_report(tmap, placement, out_html, *, title="Skull transparency placeme
         "Placement objective $\\sqrt{J_w}$ — what the window search maximises "
         "(manuscript Fig. 8)", "objective (normalised)"))
     png_3d = _fig_png(_map3d_figure(tmap))
+    png_sc = _fig_png(_scene3d_figure(tmap, placement, bowl_radius_mm))
     tmp = out.with_suffix(".placement.png")
     preview_placement(tmap, placement, out_png=str(tmp), title=title)
     png_pl = base64.b64encode(tmp.read_bytes()).decode()
@@ -398,8 +478,11 @@ the water–bone longitudinal critical angle).</p>
 
 <h2>4 · The placement objective and the chosen window</h2>
 <img src="data:image/png;base64,{png_o}" alt="objective unwrapped"/>
+<img src="data:image/png;base64,{png_sc}" alt="placement scene 3-D"/>
 <img src="data:image/png;base64,{png_pl}" alt="placement"/>
-<p class="note">&radic;J<sub>w</sub> — incidence-weighted <em>raw</em> delivered intensity
+<p class="note">The scene shows the transducer surface seated at its pose on the
+semi-transparent skull with the target marked inside the head (manuscript Figs.&nbsp;1
+and&nbsp;8 style). &radic;J<sub>w</sub> — incidence-weighted <em>raw</em> delivered intensity
 integrated over the bowl footprint, illegal patches excluded (manuscript Eqs.&nbsp;7
 &amp;&nbsp;14; the field of Fig.&nbsp;8). The red star is the chosen window; the bright
 lobe's breadth is the placement margin quoted in the summary.</p>

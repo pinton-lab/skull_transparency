@@ -78,7 +78,7 @@ def test_report_html(synthetic_bundle, tmp_path):
     from skull_transparency.report import write_report
     write_report(tmap, pl, out, target_name="testtarget")
     html = out.read_text()
-    assert html.count("data:image/png") == 5      # 3 unwraps, 3-D views, placement
+    assert html.count("data:image/png") == 6      # 3 unwraps, 3-D views, scene, placement
     assert "unwrapped" in html and "objective" in html and "@media print" in html
     assert "EEG 10-20 site" in html and "Transparency score" in html
     assert "Access (legal skull solid angle)" in html
