@@ -382,7 +382,12 @@ export FULLWAVE2_BIN=/path/to/bench_3d_opt       # or install the .[solver] extr
 python -m skull_transparency.sim outward          --sim run/ --out run/ --run --gpuid 0
 python -m skull_transparency.sim inward_windowed   --sim run/ --out run/ --run --gpuid 0
 \end{lstlisting}
-The solver runs at CFL $0.2$; the outward record length is
+For a transparency/placement run the outward solve can record \emph{only the calvarial
+surface}: \code{--recorder shell} replaces the decimated full-volume dump with the
+surface shell (all the transparency map needs), keeping the output under a gigabyte --
+this is what the Colab notebook and the precomputed gallery use. The default
+(\code{--recorder volume}) also records the decimated interior field, needed e.g.\ for
+focal-spot analysis. The solver runs at CFL $0.2$; the outward record length is
 $\approx 1.84\,\lvert\mathbf{x}_\mathrm{array}-\mathbf{x}_t\rvert_{\max}/c_0$. Each phase
 writes \code{genout.dat} (the recorded channels and frames). The medium maps depend only
 on $(c,\text{grid})$, so the inward run hardlinks them from the outward run instead of
@@ -414,9 +419,10 @@ optional $1/r^2$ distance-corrected map is for \emph{visualizing} bone transmiss
 using it for placement over-rewards far, thin-bone windows -- it is exactly the neutral
 whole-skull baseline of Section~\ref{sec:braincenter} (rendered there as transmitted
 amplitude in dB). That search weights each patch by incidence
-($\cos^2\theta$ on the true surface normal) and hard-rejects patches beyond $30^\circ$ (the
-water-to-bone longitudinal critical angle, past which the fluid solver's longitudinal
-transmission gives way to unmodeled shear conversion); the resulting incidence-weighted
+($\cos^2\theta$ on the true surface normal) and hard-rejects patches beyond the acceptance
+angle (\code{theta_max_deg}, default $35^\circ$; the water-to-bone longitudinal critical
+angle sits near $30^\circ$ -- the manuscript's analysis value -- past which the fluid
+solver's longitudinal transmission gives way to unmodeled shear conversion); the resulting incidence-weighted
 objective $\sqrt{J_w}$ is what the placement step and the interactive positioning tool maximize.
 The per-element aberration delays that
 steer the inward re-emission come from the array-element traces (each element's
@@ -503,9 +509,11 @@ from the inward re-simulation.
 \code{--approach} unit vector (target\,$\to$\,skin), or use the brain-center mode
 (\code{--center}, Section~\ref{sec:braincenter}), whose omnidirectional source needs no
 approach.
-\item \textbf{\code{prepare} sizes a cube.} It uses an $N^3$ grid from the bowl reach
-plus a margin rather than tightening to the head bounding box, which is correct but spends
-more voxels than the hand-cropped reference run.
+\item \textbf{Targeted \code{prepare} sizes a cube.} A targeted run uses an $N^3$ grid
+from the bowl reach plus a margin, which is correct but spends more voxels than the
+hand-cropped reference run. (Brain-center runs, \code{--center}, are tighter: the grid is
+sized to the head's own bounding box, shrinkable further with \code{--surround-mm} and the
+spine/mandible-trimming \code{--truncate-mm}.)
 \end{itemize}
 
 \section{The interactive positioning tool}
@@ -515,14 +523,18 @@ napari, which needs the \code{.[viz]} extra and a display):
 \begin{lstlisting}[style=sh]
 skull-transparency position --bundle run/bundle --out preview.png
 \end{lstlisting}
-A richer manual tool (Appendix A of the PMB manuscript,
-\code{runs/rebuild_6ppw_graded/ctx500_position_tool.py}) renders the skull coloured by
-the placement objective $\sqrt{J_w}$ with a translucent CTX-500 cap and three orthogonal
-slices, with a live score as a percentage of the global peak (Figure~\ref{fig:tool}).
-Keys are arrows = azimuth/elevation, \code{.}/\code{,} = radius, \code{t}/\code{g} and
-\code{y}/\code{h} = tilt/yaw, \code{1}/\code{2}/\code{3} = dentate / thalamus / dACC,
-\code{e} = export, \code{r} = reset. After a one-time \code{--build-cache} the caches
-make every later launch start with no large read.
+A richer manual tool (Appendix A of the PMB manuscript; a research prototype that is
+not distributed with this repository -- the packaged \code{position --interactive} viewer
+is its library form) renders the skull coloured by the placement objective $\sqrt{J_w}$
+with a translucent CTX-500 cap and three orthogonal slices, with a live score as a
+percentage of the global peak (Figure~\ref{fig:tool}).
+
+Two further console commands consume the same bundle. \code{skull-transparency report
+--bundle run/bundle --out report.html} writes a self-contained HTML placement report (the
+transparency and placement-objective maps unwrapped over the skull, the chosen window with
+ranked alternatives, and the coordinates/incidence/EEG-site table; print it to PDF for
+archival). \code{skull-transparency explore} opens a map interactively -- by bundle path,
+or by named target from the precomputed gallery (\code{--list-targets}).
 
 \begin{figure}[H]\centering
 \includegraphics[width=\linewidth]{figs/positioning_tool.png}

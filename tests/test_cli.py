@@ -79,3 +79,16 @@ def test_leading_minus_coordinates_parse():
     with pytest.raises(SystemExit):
         cli.build_parser().parse_args(cli._merge_coord_args(
             ["prepare", "--c-map", "c.npy", "--center-mm", "--transducer", "t.json"]))
+
+
+def test_explore_report_subcommands_exist():
+    # the notebook's take-home section points users at these two consumer commands
+    p = cli.build_parser()
+    a = p.parse_args(["explore", "--target", "dACC_left", "--no-viewer"])
+    assert a.func is cli._cmd_explore and a.target == "dACC_left"
+    a = p.parse_args(["explore", "--list-targets"])
+    assert a.list_targets
+    a = p.parse_args(["report", "--bundle", "b", "--out", "r.html"])
+    assert a.func is cli._cmd_report and a.out == "r.html"
+    with pytest.raises(SystemExit):          # --target and --bundle are exclusive
+        p.parse_args(["explore", "--target", "x", "--bundle", "y"])

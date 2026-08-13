@@ -195,6 +195,70 @@ def _cmd_position(args):
     return 0
 
 
+def _resolve_bundle(args):
+    """--bundle path, or --target name fetched from the precomputed gallery."""
+    if getattr(args, "bundle", None):
+        return args.bundle, getattr(args, "target", None)
+    if not getattr(args, "target", None):
+        raise SystemExit("need --target NAME (a precomputed gallery map; see "
+                         "`explore --list-targets`) or --bundle DIR (a map you computed)")
+    from . import gallery
+    return gallery.fetch(args.target), args.target
+
+
+def _cmd_explore(args):
+    import skull_transparency as st
+    if args.list_targets:
+        from . import gallery
+        reg = gallery.registry()
+        entries = gallery.list_targets(reg)
+        if not entries:
+            print("gallery registry is empty (no precomputed bundles published yet)")
+            return 0
+        print(f"precomputed gallery — skull: {reg.get('skull')}")
+        for name, e in sorted(entries.items()):
+            mni = e.get("target_mni_mm")
+            where = "cached/downloadable" if (reg.get("base_url") or e.get("url")) else "local gallery only"
+            print(f"  {name:20s} MNI {tuple(mni) if mni else '?'}  ({e.get('size_mb', '?')} MB, {where})")
+        return 0
+    bundle_path, tname = _resolve_bundle(args)
+    from .position_tool import preview_placement, view_napari
+    tmap = st.compute_transparency_map(st.load_bundle(bundle_path))
+    bc = (_load_transducer(args.transducer).to_bowl_constraints(focal_length_mm=args.focal_length)
+          if args.transducer else st.BowlConstraints(focal_length_mm=args.focal_length or 60.0))
+    pl = st.place_bowl(tmap, bc)
+    print(f"{tname or bundle_path}: score {pl.transparency_score:.3f}, "
+          f"incidence {pl.incidence_deg:.1f} deg")
+    if args.no_viewer:
+        out = args.out or "placement_preview.png"
+        preview_placement(tmap, pl, out_png=out, title=tname or "placement")
+        print(f"wrote {out}")
+        return 0
+    try:
+        view_napari(tmap, pl)
+    except ImportError:
+        out = args.out or "placement_preview.png"
+        preview_placement(tmap, pl, out_png=out, title=tname or "placement")
+        print(f"napari is not installed (pip install 'skull-transparency[viz]') -- "
+              f"wrote the static preview {out} instead")
+    return 0
+
+
+def _cmd_report(args):
+    import skull_transparency as st
+    from .report import write_report
+    bundle_path, tname = _resolve_bundle(args)
+    tmap = st.compute_transparency_map(st.load_bundle(bundle_path))
+    bc = (_load_transducer(args.transducer).to_bowl_constraints(focal_length_mm=args.focal_length)
+          if args.transducer else st.BowlConstraints(focal_length_mm=args.focal_length or 60.0))
+    pl = st.place_bowl(tmap, bc)
+    out = write_report(tmap, pl, args.out, target_name=tname,
+                       title=args.title or (f"Placement report — {tname}" if tname
+                                            else "Placement report"))
+    print(f"wrote {out}")
+    return 0
+
+
 def _cmd_run(args):
     rc = _cmd_prepare(args)
     if rc:
@@ -296,6 +360,30 @@ def build_parser():
 
     sp = sub.add_parser("run", help="prepare (+ the solve/extract/place chain to run next)")
     add_prepare(sp); sp.set_defaults(func=_cmd_run)
+
+    def add_source(sp):
+        g = sp.add_mutually_exclusive_group()
+        g.add_argument("--target", help="named MNI target from the precomputed gallery "
+                                        "(see explore --list-targets)")
+        g.add_argument("--bundle", help="a local Field Bundle directory instead")
+        sp.add_argument("--transducer", help="TransducerSpec JSON for the window constraints")
+        sp.add_argument("--focal-length", type=float, default=None)
+
+    sp = sub.add_parser("explore",
+                        help="open a transparency map interactively (napari) -- no GPU needed; "
+                             "fetches precomputed gallery maps by target name")
+    add_source(sp)
+    sp.add_argument("--list-targets", action="store_true", help="list the gallery and exit")
+    sp.add_argument("--no-viewer", action="store_true", help="write a static preview PNG instead")
+    sp.add_argument("--out", default=None, help="preview PNG path (with --no-viewer)")
+    sp.set_defaults(func=_cmd_explore)
+
+    sp = sub.add_parser("report",
+                        help="self-contained HTML placement report (map + pose + coordinates)")
+    add_source(sp)
+    sp.add_argument("--out", default="placement_report.html")
+    sp.add_argument("--title", default=None)
+    sp.set_defaults(func=_cmd_report)
     return p
 
 

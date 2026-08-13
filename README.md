@@ -42,7 +42,7 @@ pdct   = st.to_placement_dict(pl, target_name="dentate_left")   # placement.json
 Always read the output dict's `frame` key (`nrrd_voxel_mm` with tuba, else `mni_ras_mm`). See
 `examples/halle_dentate/` for the full pipeline, `examples/brain_center/run_brain_center.py` for the
 neutral whole-skull baseline, and `examples/synthetic/run_synthetic.py` for a no-GPU/no-data smoke
-test. The CLI (`skull-transparency prepare | extract | place | position | transparency`), the full
+test. The CLI (`skull-transparency prepare | extract | place | position | transparency | explore | report`), the full
 API, and the method are all in **[`tutorial/tutorial.pdf`](tutorial/tutorial.pdf)**.
 
 For a **neutral whole-skull** view independent of any one target, run a brain-center baseline:

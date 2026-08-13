@@ -144,6 +144,7 @@ def main(src, dst):
                 refs[m.group(1)] = str(secn)
 
     # ---- pass 2: line state machine ----------------------------------------
+    body = re.sub(r"\\(newpage|clearpage|pagebreak)\b", "", body)   # page breaks: PDF-only
     lines = body.split("\n")
     out, para = [], []
     list_stack = []           # entries: {'kind','n','marker_emitted','text'}
