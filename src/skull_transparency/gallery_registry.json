@@ -1,0 +1,128 @@
+{
+ "schema": "skull_transparency.gallery/1",
+ "skull": "itrusst_benchmark_500khz_6ppw",
+ "base_url": null,
+ "note": "computed with the shell recorder at 6 PPW, surround 12 mm, Z-floor -65 mm; set base_url to the published location of these zips (or point $SKULL_TRANSPARENCY_GALLERY at this directory)",
+ "bundles": {
+  "dACC_left": {
+   "file": "itrusst_benchmark_500khz_6ppw_dACC_left.skullbundle.zip",
+   "sha256": "2a68fb0c32acda0a462c806b561b89fbb856c3550ca46c3fb411613e23a085ce",
+   "target_mni_mm": [
+    -4,
+    24,
+    28
+   ],
+   "size_mb": 16.3
+  },
+  "M1_left": {
+   "file": "itrusst_benchmark_500khz_6ppw_M1_left.skullbundle.zip",
+   "sha256": "cfb398daead590c31ff093e5186b3fa5ce7c372e98c5cfca7299dcc2b48346d1",
+   "target_mni_mm": [
+    -37,
+    -21,
+    58
+   ],
+   "size_mb": 16.2
+  },
+  "S1_left": {
+   "file": "itrusst_benchmark_500khz_6ppw_S1_left.skullbundle.zip",
+   "sha256": "b04fa98550733014cf70727f719133dcc652d179cab9ae95a165084189a419db",
+   "target_mni_mm": [
+    -40,
+    -25,
+    55
+   ],
+   "size_mb": 16.2
+  },
+  "DLPFC_left": {
+   "file": "itrusst_benchmark_500khz_6ppw_DLPFC_left.skullbundle.zip",
+   "sha256": "fb869aea2008a0865975e6b4a5dddebdc159ee0352aa4884a96902e5f3940b6e",
+   "target_mni_mm": [
+    -40,
+    35,
+    35
+   ],
+   "size_mb": 16.2
+  },
+  "pre_SMA": {
+   "file": "itrusst_benchmark_500khz_6ppw_pre_SMA.skullbundle.zip",
+   "sha256": "e9b1f83d3074ca742119a793276c65e6af452ddcba263b03f9c801a881d656be",
+   "target_mni_mm": [
+    0,
+    10,
+    60
+   ],
+   "size_mb": 16.2
+  },
+  "PCC": {
+   "file": "itrusst_benchmark_500khz_6ppw_PCC.skullbundle.zip",
+   "sha256": "3acf2325a452c78640f79abc1b0f217537cc32464ff3f661f52475d632700642",
+   "target_mni_mm": [
+    0,
+    -50,
+    30
+   ],
+   "size_mb": 16.2
+  },
+  "V1": {
+   "file": "itrusst_benchmark_500khz_6ppw_V1.skullbundle.zip",
+   "sha256": "16ca2df6cb30892f1f0cf16c4d62958db7c76c029aa4d2c86e53546edfde7f4a",
+   "target_mni_mm": [
+    0,
+    -90,
+    0
+   ],
+   "size_mb": 15.9
+  },
+  "thalamus_central": {
+   "file": "itrusst_benchmark_500khz_6ppw_thalamus_central.skullbundle.zip",
+   "sha256": "53262e25b8fcc489b60cc05f4cebf454596e736179ff1acbd2277752ef2475fe",
+   "target_mni_mm": [
+    0,
+    -16,
+    8
+   ],
+   "size_mb": 16.2
+  },
+  "STN_left": {
+   "file": "itrusst_benchmark_500khz_6ppw_STN_left.skullbundle.zip",
+   "sha256": "4c45f5dbef75aeb6d79c1b534d6b9fe212f1130e650e7916be63ec7344eb3656",
+   "target_mni_mm": [
+    -12,
+    -14,
+    -7
+   ],
+   "size_mb": 16.1
+  },
+  "hippocampus_left": {
+   "file": "itrusst_benchmark_500khz_6ppw_hippocampus_left.skullbundle.zip",
+   "sha256": "f5344ba616d6214444119e9b018a66672a3a5a82634a41b65ed5a7f35b0093b1",
+   "target_mni_mm": [
+    -25,
+    -20,
+    -15
+   ],
+   "size_mb": 16.2
+  },
+  "amygdala_left": {
+   "file": "itrusst_benchmark_500khz_6ppw_amygdala_left.skullbundle.zip",
+   "sha256": "58d26a9416e878c7bcfe8ce339c4d55f1a717dfb7496690172c2d2b8ae116278",
+   "target_mni_mm": [
+    -22,
+    -6,
+    -18
+   ],
+   "size_mb": 16.2
+  },
+  "cerebellum_central": {
+   "file": "itrusst_benchmark_500khz_6ppw_cerebellum_central.skullbundle.zip",
+   "sha256": "83a9276c964f02afe6b4941cf1a628e13412df60a8af6665c890fd9154d0fee2",
+   "target_mni_mm": [
+    0,
+    -60,
+    -30
+   ],
+   "size_mb": 16.2
+  }
+ }
+}
