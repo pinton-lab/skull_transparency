@@ -6,9 +6,7 @@
 
 Given a subject's skull and a deep brain target, the tool finds **where to place a focused-ultrasound transducer, and at what pose**, to couple acoustic energy through the skull onto that target. It works by *acoustic reciprocity*: rather than search transducer positions by trial, it places a virtual point source *at the target* and runs one full-wave solve so the wave propagates **outward** through the skull, recording where it emerges on the outer skull surface and with what phase. Bright, in-phase surface patches are exactly the good acoustic windows; re-emitting that recording **time-reversed** converges back onto the target (Figure 1). The tool then searches that recorded surface for the best window and reports a concrete transducer placement plus a coupling score. The very same outward recording, taken from a source at the *center of the brain* rather than a target, instead gives a neutral **whole-skull** transparency map -- where the skull transmits, independent of any one target (Section 5).
 
-![Figure 1](../manuscript/figs/movie_frames/frame-67.png)
-
-*(animation, 135 frames — plays in the PDF; one representative frame is shown here.)*
+![Figure 1](figs/fig_propagation_frame.png)
 
 **Figure 1.** Full-wave transcranial propagation (plays in Acrobat and compatible PDF viewers; otherwise one representative frame is shown). Grey = skull, cyan = the rigid occipital bowl, green $+$ = the dentate target. First the **outward** diverging wavefront sweeps from the target out to the full bowl; then the **inward** time-reversed re-emission converges back to refocus on the target. The outward pass records where the skull is acoustically "transparent", the data the tool reads to choose a window.
 
@@ -80,7 +78,7 @@ The box is placed into world space by a rigid (orthonormal) map $R$ plus one anc
 
 A target is just a **point in world millimetres** plus an **approach direction**. You pass the target coordinate in whatever frame your affine uses (MNI RAS is typical) and a unit vector pointing from the target out toward the skin; `prepare` poses the grid so that approach is $+Z$, seats the recording surface on that side, and echoes the target's grid voxel into `meta.json` (`dent_grid`) so you can confirm placement. The three deep targets used to demonstrate the method (Figure 4) are the left dentate nucleus $(-12,-57,-34)$, the thalamus $(-12,-18,8)$ and the dorsal anterior cingulate $(-4,24,28)$, each localized in MNI and mapped into the skull by the rigid registration.
 
-![Figure 4](../manuscript/figs/targets_in_skull.png)
+![Figure 4](figs/targets_in_skull.png)
 
 **Figure 4.** The three deep targets in the skull frame (semi-transparent skull, three views): the left dentate nucleus (cyan, posterior fossa), thalamus (gold, central) and dorsal anterior cingulate (magenta, anterior). Each is defined as an MNI point and mapped into the skull by the rigid map of Figure 3.
 
@@ -168,7 +166,7 @@ python -m skull_transparency.sim subset_focalbox --mode flat --selfile sel.i32 -
 
 From the outward record, `integrate_outward` forms, per grid voxel, the time-integrated intensity $\mathcal{I}=\sum_t p^2(t)$ (deposited energy) and the peak pressure $p_{\max}=\max_t\lvert p(t)\rvert$, which is dominated by the clean direct arrival. Sampling $p_{\max}$ just outside the bone surface within the direct-arrival (ballistic) window $t\le 1.12\,\lvert\mathbf{x}-\mathbf{x}_t\rvert/c_0$, the *raw* peak intensity $I=p_{\max}^2/(2\rho c)$ (geometric spreading included, so it is dominated by proximity to the target) is the coupling (transparency) map the placement search reads. The optional $1/r^2$ distance-corrected map is for *visualizing* bone transmission only; using it for placement over-rewards far, thin-bone windows -- it is exactly the neutral whole-skull baseline of Section 5 (rendered there as transmitted amplitude in dB). That search weights each patch by incidence ($\cos^2\theta$ on the true surface normal) and hard-rejects patches beyond $30^\circ$ (the water-to-bone longitudinal critical angle, past which the fluid solver's longitudinal transmission gives way to unmodeled shear conversion); the resulting incidence-weighted objective $\sqrt{J_w}$ is what the placement step and the interactive positioning tool maximize. The per-element aberration delays that steer the inward re-emission come from the array-element traces (each element's direct-arrival time), not from this surface map. From the inward record, the converged field gives the focal spot and the on-target peak relative to the 1 Pa per-element drive. For the reference dentate the dense $120^\circ$ occipital array (the validation aperture of Figure 7) refocuses as a near-wavelength spot ($-6$ dB FWHM $1.25\times2.5\times2.25$ mm) at $20.7\times$ the per-element drive. A single buildable bowl is weaker: the 64 mm transducer the placement step seats refocuses on the dentate at $7.9\times$, and the same procedure reaches $15.2\times$ at the thalamus and $11.4\times$ at the dACC through their own windows.
 
-![Figure 7](../manuscript/figs/focus_energy_qc.png)
+![Figure 7](figs/focus_energy_qc.png)
 
 **Figure 7.** The transcranial focal spot at the dentate, computed from the inward re-emission at 1 Pa per-element drive (three orthogonal slices through the focal peak, dB relative to peak; white contour $=-6$ dB / FWHM). This is the field the inward phase produces; the outward phase produces the surface coupling map that chose the window.
 
@@ -213,7 +211,7 @@ skull-transparency position --bundle run/bundle --out preview.png
 
 A richer manual tool (Appendix A of the PMB manuscript, `runs/rebuild_6ppw_graded/ctx500_position_tool.py`) renders the skull coloured by the placement objective $\sqrt{J_w}$ with a translucent CTX-500 cap and three orthogonal slices, with a live score as a percentage of the global peak (Figure 8). Keys are arrows = azimuth/elevation, `.`/`,` = radius, `t`/`g` and `y`/`h` = tilt/yaw, `1`/`2`/`3` = dentate / thalamus / dACC, `e` = export, `r` = reset. After a one-time `--build-cache` the caches make every later launch start with no large read.
 
-![Figure 8](../manuscript/figs/positioning_tool.png)
+![Figure 8](figs/positioning_tool.png)
 
 **Figure 8.** The interactive positioning tool, shown for the dentate. Centre, the skull surface coloured by the placement objective $\sqrt{J_w}$ (dark to bright = low to high single-element coupling) with a translucent 64 mm bowl (cyan) on the occipital window, the target (green) and its geometric focus (magenta). Bottom, the same placement in three orthogonal slices through the target.
 

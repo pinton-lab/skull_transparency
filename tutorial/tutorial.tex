@@ -71,7 +71,11 @@ source at the \emph{center of the brain} rather than a target, instead gives a n
 target (Section~\ref{sec:braincenter}).
 
 \begin{figure}[H]\centering
-\animategraphics[controls,loop,width=0.82\linewidth]{12}{../manuscript/figs/movie_frames/frame-}{0}{134}
+\IfFileExists{../manuscript/figs/movie_frames/frame-0.png}{%
+\animategraphics[controls,loop,width=0.82\linewidth]{12}{../manuscript/figs/movie_frames/frame-}{0}{134}%
+}{%
+\includegraphics[width=0.82\linewidth]{figs/fig_propagation_frame.png}%
+}
 \caption{Full-wave transcranial propagation (plays in Acrobat and compatible PDF
 viewers; otherwise one representative frame is shown). Grey = skull, cyan = the rigid
 occipital bowl, green $+$ = the dentate target. First the \textbf{outward} diverging
@@ -222,7 +226,7 @@ $(-12,-18,8)$ and the dorsal anterior cingulate $(-4,24,28)$, each localized in 
 mapped into the skull by the rigid registration.
 
 \begin{figure}[H]\centering
-\includegraphics[width=0.82\linewidth]{../manuscript/figs/targets_in_skull.png}
+\includegraphics[width=0.82\linewidth]{figs/targets_in_skull.png}
 \caption{The three deep targets in the skull frame (semi-transparent skull, three
 views): the left dentate nucleus (cyan, posterior fossa), thalamus (gold, central) and
 dorsal anterior cingulate (magenta, anterior). Each is defined as an MNI point and
@@ -426,7 +430,7 @@ dentate at $7.9\times$, and the same procedure reaches $15.2\times$ at the thala
 $11.4\times$ at the dACC through their own windows.
 
 \begin{figure}[H]\centering
-\includegraphics[width=0.72\linewidth]{../manuscript/figs/focus_energy_qc.png}
+\includegraphics[width=0.72\linewidth]{figs/focus_energy_qc.png}
 \caption{The transcranial focal spot at the dentate, computed from the inward re-emission
 at 1 Pa per-element drive (three orthogonal slices through the focal peak, dB relative to
 peak; white contour $=-6$ dB / FWHM). This is the field the inward phase produces; the
@@ -521,7 +525,7 @@ Keys are arrows = azimuth/elevation, \code{.}/\code{,} = radius, \code{t}/\code{
 make every later launch start with no large read.
 
 \begin{figure}[H]\centering
-\includegraphics[width=\linewidth]{../manuscript/figs/positioning_tool.png}
+\includegraphics[width=\linewidth]{figs/positioning_tool.png}
 \caption{The interactive positioning tool, shown for the dentate. Centre, the skull
 surface coloured by the placement objective $\sqrt{J_w}$ (dark to bright = low to high
 single-element coupling) with a translucent 64 mm bowl (cyan) on the occipital window,
