@@ -876,11 +876,95 @@ def _forward_figure(peaks, placement, reg, comparison=None, c_map=None, c0=None,
     return fig
 
 
+#: Source classes for the parameter table, in the ultraneuron/neuromod convention: every
+#: number a result depends on is labelled by where it came from, so a reader can see at a
+#: glance which values are measured, which are taken from the literature, and which are
+#: assumptions that a sensitivity check should bracket.
+_SOURCE_CLASSES = ("Measured", "Literature", "Derived", "Convention", "Assumption")
+
+
+def _provenance_rows(tmap, placement, bundle=None, *, bowl_radius_mm=None,
+                     theta_max_deg=None, extra=None):
+    """Rows of ``(parameter, value, source, note)`` for the parameter table.
+
+    Everything is read from the bundle the map came from, so the table describes the run
+    that produced this report rather than the library's defaults. ``extra`` appends
+    caller-supplied rows (a case can document its own choices)."""
+    phys = dict(getattr(bundle, "physics", {}) or {})
+    grid = dict(getattr(bundle, "grid", {}) or {})
+    arr = dict(getattr(bundle, "array", {}) or {})
+    geom = dict(arr.get("geometry", {}) or {})
+    reg = tmap.registration
+    dx_mm = 1e3 * float(grid.get("dx_m", (reg.dx_mm / 1e3 if reg else 0.0)))
+    f0 = float(phys.get("f0", 0.0))
+    c0 = float(phys.get("c0", 0.0))
+    lam = (1e3 * c0 / f0) if f0 else float("nan")
+    rows = [
+        ("Target", f"{np.round(np.asarray(placement.target_mni_mm, float), 2).tolist()} mm",
+         "Derived", "The point the virtual source is placed at; from an atlas structure or "
+                    "given explicitly."),
+        ("World frame", str(getattr(reg, "world_frame", "mni_ras_mm")), "Convention",
+         "The frame every coordinate in this report is expressed in."),
+        ("Drive frequency f0", f"{f0/1e3:.0f} kHz", "Measured",
+         "The device's drive frequency; sets the wavelength and the grid."),
+        ("Reference speed c0", f"{c0:.0f} m/s", "Literature",
+         "Water / soft tissue; the coupling medium and the grid reference."),
+        ("Bone speed (max)", f"{float(phys.get('c_bone', float('nan'))):.0f} m/s", "Literature",
+         "Cortical-bone endpoint of the intensity-to-speed ramp."),
+        ("Bone threshold", f"{float(phys.get('bone_threshold', float('nan'))):.0f} m/s",
+         "Assumption", "Speed above which a voxel counts as bone, i.e. where the calvarial "
+                       "surface is drawn. Between water and cortical bone; worth a "
+                       "sensitivity check on a thin or a demineralised skull."),
+        ("Points per wavelength", f"{float(phys.get('ppw', float('nan'))):.1f}", "Convention",
+         f"Grid pitch dx = c0/(f0*ppw) = {dx_mm:.3f} mm against a {lam:.2f} mm wavelength. "
+         "For a thin skull the bone thickness, not the wavelength, is the binding "
+         "constraint."),
+        ("Grid pitch dx", f"{dx_mm:.3f} mm", "Derived", "From f0, c0 and ppw."),
+    ]
+    if geom:
+        rows += [
+            ("Transducer geometry",
+             f"{geom.get('geometry', '?')}, ROC {geom.get('roc_mm', float('nan')):.1f} mm, "
+             f"aperture {geom.get('aperture_mm', float('nan')):.1f} mm"
+             + (f", {geom['n_rings']} rings" if geom.get("n_rings") else ""),
+             "Measured", "The device as built."),
+            ("Cone half-angle", f"{float(geom.get('half_angle_deg', float('nan'))):.1f} deg",
+             "Derived", "arcsin((aperture/2)/ROC); what the beam actually subtends."),
+        ]
+    if bowl_radius_mm is not None:
+        rows.append(("Window footprint radius", f"{float(bowl_radius_mm):.1f} mm", "Derived",
+                     "Radius on the skull the window score is aggregated over. Equals the "
+                     "aperture radius only when the skull sits about one focal length from "
+                     "the target; otherwise it is r_skull*sin(half-angle)."))
+    if theta_max_deg is not None:
+        rows.append(("Acceptance angle", f"{float(theta_max_deg):.0f} deg", "Literature",
+                     "Incidence cap for a legal window, near the water-to-bone longitudinal "
+                     "critical angle; past it the fluid model's longitudinal transmission "
+                     "gives way to unmodelled shear conversion."))
+    rows += [
+        ("Surface patches", f"{len(np.asarray(tmap.surf_vox)):,}", "Derived",
+         "Calvarial surface voxels the outward solve recorded."),
+        ("Recorder", str(dict(getattr(bundle, "meta", {}) or {}).get("recorder",
+                              getattr(bundle, "recorder", "shell"))), "Convention",
+         "'shell' records only the calvarial surface, which is all the transparency map "
+         "needs; 'volume' also records the decimated interior field."),
+    ]
+    return rows + list(extra or [])
+
+
+def _provenance_html(rows):
+    body = "\n".join(
+        f"<tr><td>{p}</td><td>{v}</td><td><b>{src}</b></td><td>{note}</td></tr>"
+        for p, v, src, note in rows)
+    return ("<table><tr><th>Parameter</th><th>Value</th><th>Source</th><th>Notes</th></tr>"
+            + body + "</table>")
+
+
 def write_report(tmap, placement, out_html, *, title="Skull transparency placement",
                  target_name=None, bowl_radius_mm=32.0, theta_max_deg=35.0,
                  pdf=None, bundle=None, atlas=None, atlas_ids=None,
                  atlas_label="target structure", movie=None, movie_caption=None,
-                 forward=None) -> Path:
+                 forward=None, parameters=None, frame_is_mni=None) -> Path:
     """Write the placement report; returns the path written.
 
     ``bowl_radius_mm`` / ``theta_max_deg`` parameterise the objective, alternates, and
@@ -904,7 +988,17 @@ def write_report(tmap, placement, out_html, *, title="Skull transparency placeme
     ``forward`` adds the transcranial-vs-free-field section: pass the directory of a solved
     forward pair (or a ``focal_peaks.npz`` written by :func:`forward_peak_volumes`, with
     ``forward.json`` beside it). The section reports what the skull costs at the target and
-    shows where it puts the energy instead."""
+    shows where it puts the energy instead.
+
+    ``parameters`` appends rows to the parameter table -- ``(name, value, source, note)``
+    with ``source`` one of Measured / Literature / Derived / Convention / Assumption, the
+    classification the neuromodulation reports use so a reader can see which numbers are
+    measured and which are assumptions that deserve a sensitivity check.
+
+    ``frame_is_mni`` overrides the frame test that decides whether the human atlas
+    conventions apply (EEG 10-20 sites, "MNI mm" labels). It is inferred from the bundle's
+    recorded world frame, but a producer that stamped only a generic ``ras_mm`` will read as
+    non-MNI even when the skull is MNI-aligned -- pass ``True`` for such a bundle."""
     want_pdf = (str(out_html).lower().endswith(".pdf")) if pdf is None else bool(pdf)
     out_html = Path(out_html).with_suffix(".html")
     from .position_tool import preview_placement
@@ -916,6 +1010,9 @@ def write_report(tmap, placement, out_html, *, title="Skull transparency placeme
     win = np.asarray(placement.window_center_mni_mm, float)
 
     u = _UnwrapData(tmap, placement, bowl_radius_mm, theta_max_deg)
+    if frame_is_mni is not None:
+        u.is_mni = bool(frame_is_mni)
+        u.sites, u.slon, u.slat = ([], [], []) if not u.is_mni else (u.sites, u.slon, u.slat)
     wf = str(getattr(tmap.registration, "world_frame", "mni_ras_mm") or "mni_ras_mm")
     frame_lbl = "MNI" if u.is_mni else f"world ({wf})"
     vt = tuple(np.percentile(u.db, [25.0, 99.0]))
@@ -1093,7 +1190,13 @@ def write_report(tmap, placement, out_html, *, title="Skull transparency placeme
         movie_html = (f"<h2>{_n} · Wave propagation</h2>\n" + movie_html
                       + f'<p class="note">{cap}</p>\n')
         _n += 1
-    n_surf, n_inc, n_obj, n_alt, n_meth = _n, _n + 1, _n + 2, _n + 3, _n + 4
+    n_surf, n_inc, n_obj, n_alt, n_par = _n, _n + 1, _n + 2, _n + 3, _n + 4
+    n_meth = _n + 5
+    prov_html = _provenance_html(_provenance_rows(
+        tmap, placement, bundle, bowl_radius_mm=bowl_radius_mm,
+        theta_max_deg=theta_max_deg, extra=parameters))
+    fwd_scope = ("" if fwd_json else
+                 " (a transcranial-vs-free-field pair is one; see the forward module)")
     stamp = datetime.date.today().isoformat()
     html = f"""<!doctype html><html><head><meta charset="utf-8"><title>{title}</title>
 <style>
@@ -1102,6 +1205,7 @@ def write_report(tmap, placement, out_html, *, title="Skull transparency placeme
  h1 {{ font-size: 1.4em; }} h2 {{ font-size: 1.1em; margin-top: 1.6em; }}
  table {{ border-collapse: collapse; }} td {{ border: 1px solid #ccd; padding: 5px 12px; }}
  td:first-child {{ background: #f4f6f9; font-weight: 600; }}
+ th {{ border: 1px solid #ccd; padding: 5px 12px; background: #e7ebf1; text-align: left; }}
  img {{ max-width: 100%; }} .note {{ color: #445; font-size: 0.9em; background: #f4f6f9;
         border-left: 3px solid #2c6fbf; padding: 6px 10px; }}
  footer {{ color: #778; font-size: 0.85em; margin-top: 2em; }}
@@ -1112,6 +1216,14 @@ def write_report(tmap, placement, out_html, *, title="Skull transparency placeme
  }}
 </style></head><body>
 <h1>{title}</h1>
+
+<p class="note"><b>Scope.</b> This reports where to couple a transducer for one target on
+one skull, and what that placement delivers. It comes from a single full-wave time-reversal
+solve: a virtual source at the target radiates outward, and by reciprocity the field
+recorded on the skull is the transmit coupling of every candidate window. Everything after
+the solve -- the window search, the alternatives, the figures -- is post-processing on that
+one recorded field. It does <i>not</i> establish the focal volume, off-target lobes, or
+safety margins; those need the inward re-simulation{fwd_scope}.</p>
 
 <h2>1 · Placement summary</h2>
 <table>{trs}</table>
@@ -1147,6 +1259,14 @@ lobe's breadth is the placement margin quoted in the summary.</p>
 
 <h2>{n_alt} · Alternative windows (if the optimum is blocked)</h2>
 {alts_table}
+
+<h2>{n_par} · Parameters and their provenance</h2>
+{prov_html}
+<p class="note">Every number this result depends on, labelled by where it came from.
+<b>Measured</b> is the device or the scan; <b>Literature</b> is a published value;
+<b>Derived</b> follows from the others; <b>Convention</b> is a choice of the pipeline; and
+<b>Assumption</b> is a value chosen by judgement, which is where a sensitivity check earns
+its keep.</p>
 
 <h2>{n_meth} · Methods</h2>
 <details><summary><b>How each number is computed</b></summary>
