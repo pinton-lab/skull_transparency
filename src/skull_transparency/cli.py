@@ -18,10 +18,15 @@ Subcommands::
   skull-transparency position     --bundle run/bundle --out fig.png   # -> placement preview (--interactive: napari)
   skull-transparency run ...      # = prepare, then prints the solve/extract/place chain to run next
 
+  skull-transparency forward --sim run/ --placement result/placement.json \
+      --out run/forward                    # -> transcranial vs free-field pressure at the target
+
 ``prepare`` needs no GPU (it only writes solver inputs). ``place`` consumes a
 post-solve Field Bundle and emits ``surface_map.npz`` (transparency map),
 ``score.json`` (positioning score), and ``placement.json``; ``transparency`` renders
-the 1/r^2-corrected whole-skull map (the brain-center baseline).
+the 1/r^2-corrected whole-skull map (the brain-center baseline). ``forward`` drives the
+transducer INTO the head twice — through the skull and through water only — and reports
+the insertion loss of that placement (GPU; see :mod:`skull_transparency.forward`).
 """
 from __future__ import annotations
 
@@ -260,6 +265,25 @@ def _cmd_report(args):
     return 0
 
 
+def _cmd_forward(args):
+    from .forward import run_forward_pair, write_forward_pair
+    vec = lambda s: (_parse_vec(s) if s else None)
+    kw = dict(free_field=not args.no_free_field, box_half_mm=args.box_mm, modT=args.modt,
+              p0=args.p0, roc_mm=args.roc_mm, aperture_mm=args.aperture_mm,
+              density=args.density, apex_mm=vec(args.apex_mm), target_mm=vec(args.target_mm),
+              apex_vox=vec(args.apex_vox), target_vox=vec(args.target_vox))
+    if args.no_run:
+        decks = write_forward_pair(args.sim, args.placement, args.out, run_solver=False,
+                                   log=print, **kw)
+        cases = [k for k in ("transcranial", "free_field") if decks.get(k)]
+        print(f"wrote {len(cases)} forward deck(s) under {args.out} ({', '.join(cases)}); "
+              "run the CUDA solver in each, then re-run without --no-run to compare.")
+        return 0
+    run_forward_pair(args.sim, args.placement, args.out, gpu=args.gpu, log=print, **kw)
+    print(f"wrote {Path(args.out)/'forward.json'}")     # log=print already printed the summary
+    return 0
+
+
 def _cmd_run(args):
     rc = _cmd_prepare(args)
     if rc:
@@ -387,13 +411,43 @@ def build_parser():
     sp.add_argument("--pdf", action="store_true", help="render a PDF as well as the HTML")
     sp.add_argument("--title", default=None)
     sp.set_defaults(func=_cmd_report)
+
+    sp = sub.add_parser("forward",
+                        help="forward pair (GPU): transcranial vs free-field pressure at the "
+                             "target -> insertion loss for one placement")
+    sp.add_argument("--sim", required=True, help="prepared sim tree (meta.json + c.f32)")
+    sp.add_argument("--placement", default=None,
+                    help="placement.json from `place` (or a BowlPlacement dict); omit to seat "
+                         "the bowl on the tree's own approach axis")
+    sp.add_argument("--apex-mm", default=None, help="transducer face centre in world mm 'x,y,z' "
+                                                    "(overrides --placement)")
+    sp.add_argument("--target-mm", default=None, help="target in world mm 'x,y,z' "
+                                                      "(default: the tree's own target)")
+    sp.add_argument("--apex-vox", default=None, help="face centre in grid voxels 'i,j,k'")
+    sp.add_argument("--target-vox", default=None, help="target in grid voxels 'i,j,k'")
+    sp.add_argument("--roc-mm", type=float, default=None,
+                    help="bowl radius of curvature (default: the tree's transducer, else CTX-500)")
+    sp.add_argument("--aperture-mm", type=float, default=None, help="bowl aperture diameter")
+    sp.add_argument("--density", type=float, default=1.0,
+                    help="bowl surface sampling density (1.0 = continuous at grid pitch)")
+    sp.add_argument("--box-mm", type=float, default=12.0,
+                    help="half-width of the recorded focal box around the target (mm)")
+    sp.add_argument("--modt", type=int, default=2, help="record one frame every modT steps")
+    sp.add_argument("--p0", type=float, default=1.0, help="drive amplitude at the bowl face (Pa)")
+    sp.add_argument("--gpu", type=int, default=0, help="CUDA device for both solves")
+    sp.add_argument("--no-free-field", action="store_true",
+                    help="skip the all-water twin (no transmission ratio, transcranial only)")
+    sp.add_argument("--no-run", action="store_true",
+                    help="write both decks and stop (no solver, no GPU needed)")
+    sp.add_argument("--out", required=True, help="output directory for the two runs + forward.json")
+    sp.set_defaults(func=_cmd_forward)
     return p
 
 
 # Coordinate-valued options whose value can start with a minus (left-hemisphere x,
 # inferior z ...). argparse reads a space-separated leading-minus value as a new option
 # flag ("--center-mm: expected one argument"), so merge OPT VALUE into OPT=VALUE.
-_COORD_OPTS = ("--target", "--center-mm")
+_COORD_OPTS = ("--target", "--center-mm", "--target-mm", "--apex-mm")
 
 
 def _merge_coord_args(argv):
