@@ -76,8 +76,9 @@ bundle. The remaining sections follow the human reports: surface coupling, beam 
 against the legality limit, the placement objective, ranked alternative windows, and methods.
 
 It then carries **transcranial vs free field** (the table above plus the two focal fields
-on one colour scale — a clean free-field focus against the dimmer, fragmented transcranial
-one) and the **wave-propagation animation**: it plays inline in the HTML, and the PDF gets
+on one colour scale, over the skull itself: bone filled where it is really there, a dashed
+outline in the free-field row where it was replaced by water — a clean focus on target
+against the dimmer transcranial one whose peak sits on the inner table) and the **wave-propagation animation**: it plays inline in the HTML, and the PDF gets
 an appended page built with LaTeX's `animate` package, so it plays in Acrobat exactly as
 the manuscript's propagation figure does. Both sections appear only when their inputs
 exist, so `place` still works on its own.

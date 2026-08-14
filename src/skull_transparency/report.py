@@ -763,12 +763,20 @@ def forward_peak_volumes(forward_dir, out_npz=None):
     return out
 
 
-def _forward_figure(peaks, placement, reg, comparison=None):
+def _forward_figure(peaks, placement, reg, comparison=None, c_map=None, c0=None,
+                    bone_threshold=None):
     """Transcranial vs free-field focal fields on one colour scale.
 
     Rows are the two media, columns the three planes through the target. Same source, same
     grid, same drive -- only the medium differs -- so the panels are directly comparable:
-    what the skull costs on target, and where it puts the energy instead."""
+    what the skull costs on target, and where it puts the energy instead.
+
+    With ``c_map`` the skull is drawn underneath in grey and the field is composited over it
+    with an amplitude-proportional alpha, so the focus can be read against the bone that
+    made it. The recording box is expressed relative to the target, so placing it in the
+    bundle's anatomy needs the two grids to share pitch and axis orientation -- true when
+    both came from ``prepare`` on the same medium. That is checked, and the background is
+    simply omitted rather than drawn wrong when it does not hold."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -791,6 +799,16 @@ def _forward_figure(peaks, placement, reg, comparison=None):
     if np.any(ctr < -1) or np.any(ctr > np.asarray(peaks["transcranial"]).shape) + 1:
         pass                                            # (checked below, per-plane clipping)
     vmax = max(float(np.asarray(peaks[k]).max()) for k in ("transcranial", "free_field"))
+
+    # skull background: only when the forward grid and the bundle agree on pitch and the
+    # bundle's world axes are the grid axes (both hold for runs prepared from one medium)
+    show_bone = False
+    if c_map is not None and reg is not None:
+        R = np.asarray(getattr(reg, "R_mni_to_sim", np.eye(3)), float)
+        show_bone = (abs(dx - float(reg.dx_mm)) < 1e-6
+                     and np.allclose(R, np.eye(3), atol=1e-6))
+    tgt_w = np.asarray(placement.target_mni_mm, float)
+    c0 = float(np.nanmin(c_map)) if (c0 is None and c_map is not None) else c0
     planes = (("sagittal", 0, 1, 2, "y (mm)", "z (mm)"),
               ("coronal", 1, 0, 2, "x (mm)", "z (mm)"),
               ("axial", 2, 0, 1, "x (mm)", "y (mm)"))
@@ -805,8 +823,36 @@ def _forward_figure(peaks, placement, reg, comparison=None):
                 sl = sl.T
             ext = [(-ctr[a_ax]) * dx, (vol.shape[a_ax] - ctr[a_ax]) * dx,
                    (-ctr[b_ax]) * dx, (vol.shape[b_ax] - ctr[b_ax]) * dx]
-            im = ax.imshow(sl.T, origin="lower", extent=ext, cmap="inferno", vmin=0.0,
-                           vmax=vmax, aspect="equal", interpolation="bilinear")
+            if show_bone:
+                ax.set_facecolor("black")     # same base as the transcranial row's water,
+                #                               so the two rows are directly comparable
+                # box offsets are relative to the target, so world = target + offset
+                ga = np.linspace(ext[0], ext[1], sl.shape[0])
+                gb = np.linspace(ext[2], ext[3], sl.shape[1])
+                A2, B2 = np.meshgrid(ga, gb, indexing="ij")
+                P = np.empty(A2.shape + (3,), float)
+                P[..., n_ax] = tgt_w[n_ax]
+                P[..., a_ax] = tgt_w[a_ax] + A2
+                P[..., b_ax] = tgt_w[b_ax] + B2
+                bg = np.where(np.isfinite(_sample_volume(c_map, reg, P)),
+                              _sample_volume(c_map, reg, P), c0)
+                if label == "transcranial":          # the bone is actually there
+                    ax.imshow(bg.T, origin="lower", extent=ext, cmap="bone", vmin=c0,
+                              vmax=float(np.nanmax(c_map)), aspect="equal",
+                              interpolation="bilinear")
+                    if bone_threshold:
+                        ax.contour(ga, gb, bg.T, levels=[float(bone_threshold)],
+                                   colors="#7fd4ff", linewidths=0.8, alpha=0.9)
+                elif bone_threshold:                 # free field: OUTLINE ONLY -- this run
+                    ax.contour(ga, gb, bg.T, levels=[float(bone_threshold)],  # has no skull
+                               colors="#7fd4ff", linewidths=0.8, alpha=0.55,
+                               linestyles="--")
+            rgba = plt.get_cmap("inferno")(np.clip(sl / (vmax or 1.0), 0, 1))
+            rgba[..., 3] = (np.clip(sl / (vmax or 1.0), 0, 1) ** 0.55) if show_bone else 1.0
+            im = ax.imshow(np.transpose(rgba, (1, 0, 2)), origin="lower", extent=ext,
+                           aspect="equal", interpolation="bilinear")
+            im = ax.imshow(np.full((1, 1), np.nan), extent=ext, cmap="inferno",
+                           vmin=0.0, vmax=vmax)          # carries the colourbar mapping
             ax.scatter([0], [0], marker="+", s=120, c="cyan", linewidths=1.6)
             pk = np.unravel_index(int(np.argmax(vol)), vol.shape)
             ax.scatter([(pk[a_ax] - ctr[a_ax]) * dx], [(pk[b_ax] - ctr[b_ax]) * dx],
@@ -814,8 +860,9 @@ def _forward_figure(peaks, placement, reg, comparison=None):
             if r == 0:
                 ax.set_title(name, fontsize=10)
             ax.set_xlabel(xl, fontsize=8)
-            ax.set_ylabel(("through the skull" if r == 0 else "free field") + f"\n{yl}"
-                          if c == 0 else yl, fontsize=8)
+            row_lbl = ("through the skull" if r == 0
+                       else "free field\n(no skull; dashed = where bone would be)")
+            ax.set_ylabel(f"{row_lbl}\n{yl}" if c == 0 else yl, fontsize=8)
             ax.tick_params(labelsize=7)
     fig.colorbar(im, ax=axes, fraction=0.016, pad=0.01).set_label("peak |p| (Pa)", fontsize=9)
     sub = ""
@@ -905,6 +952,14 @@ def write_report(tmap, placement, out_html, *, title="Skull transparency placeme
                                        atlas_label)
             if fig_t3d is not None:
                 png_t3d = _fig_png(fig_t3d)
+    _fwd_cmap = _fwd_c0 = _fwd_thr = None
+    if bundle is not None:
+        try:
+            _fwd_cmap = bundle.skull_c()
+            _p = dict(getattr(bundle, "physics", {}) or {})
+            _fwd_c0, _fwd_thr = _p.get("c0"), _p.get("bone_threshold")
+        except Exception:
+            _fwd_cmap = None
     png_fwd, fwd_json = None, None
     if forward is not None:
         fp = Path(forward)
@@ -920,7 +975,8 @@ def write_report(tmap, placement, out_html, *, title="Skull transparency placeme
             import json as _json
             fwd_json = _json.loads(jpath.read_text())
         if peaks:
-            fig_fwd = _forward_figure(peaks, placement, tmap.registration, fwd_json)
+            fig_fwd = _forward_figure(peaks, placement, tmap.registration, fwd_json,
+                                      c_map=_fwd_cmap, c0=_fwd_c0, bone_threshold=_fwd_thr)
             if fig_fwd is not None:
                 png_fwd = _fig_png(fig_fwd)
     png_3d = _fig_png(_map3d_figure(tmap))
