@@ -57,6 +57,8 @@ ANNOT_NII = REG / "allen_annotation_in_maga.nii.gz"           # Allen CCFv3 in t
 HERE = Path(__file__).resolve().parent
 SCRATCH = Path(os.environ.get("SCRATCH", "/dev/shm/mouse_tips_cb"))   # transient solver deck
 OUT = Path(os.environ.get("OUT", HERE / "bundle"))                    # the (small) Field Bundle
+MOVIE = HERE / "propagation_mouse_tips_cerebellum.mp4"                # optional (see make_propagation_movie.py)
+FWD = HERE / "forward"                                                # optional (see run_forward_comparison.py)
 
 # maga Section-8 intensity -> sound-speed ramp (shared with the rest of the mouse work)
 I_LOW, I_HIGH = 5000.0, 25000.0
@@ -188,7 +190,14 @@ def place():
                        theta_max_deg=TIPS.acceptance_angle_deg,
                        title="Mouse — TIPS 1 MHz on the middle of the cerebellum",
                        bundle=bundle, atlas=ANNOT_NII, atlas_ids=CEREBELLUM_IDS,
-                       atlas_label="cerebellum")
+                       atlas_label="cerebellum", forward=FWD if FWD.exists() else None,
+                       movie=MOVIE if MOVIE.exists() else None,
+                       movie_caption=(
+                           "Outward time-reversal wave leaving the cerebellum and sweeping "
+                           "through the mouse skull (sagittal, coronal and axial through the "
+                           "target; time in microseconds). Plays in Acrobat and compatible "
+                           "PDF viewers; other readers show one frame. Regenerate with "
+                           "make_propagation_movie.py."))
     print(f"REPORT -> {rep}")
     return pl
 

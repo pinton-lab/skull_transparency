@@ -627,10 +627,213 @@ def html_to_pdf(html_path, pdf_path=None, *, timeout_s: float = 180.0) -> Path:
         f"{html} is complete and prints to PDF from any browser.")
 
 
+def _movie_frames(movie, out_dir, *, max_frames: int = 60, width: int = 900):
+    """Extract evenly spaced PNG frames from a movie (mp4/gif) or a directory of frames.
+
+    Returns ``(n_frames, fps)``; files are written as ``frame-0.png`` ... in ``out_dir``,
+    the zero-based, unpadded naming ``\animategraphics`` expects. Frames are subsampled and
+    downscaled because the animation is embedded in the PDF whole -- 105 full-size frames
+    would add tens of megabytes for no visible gain."""
+    import imageio.v3 as iio
+    src = Path(movie)
+    fps = 12.0
+    if src.is_dir():
+        files = sorted(src.glob("*.png"))
+        imgs = [iio.imread(f) for f in files]
+    else:
+        try:
+            meta = iio.immeta(str(src))
+            fps = float(meta.get("fps", fps))
+        except Exception:
+            pass
+        imgs = list(iio.imiter(str(src)))
+    if not imgs:
+        return 0, fps
+    keep = np.linspace(0, len(imgs) - 1, min(max_frames, len(imgs))).round().astype(int)
+    fps = max(1.0, fps * len(keep) / len(imgs))          # keep the wall-clock duration
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for j, i in enumerate(keep):
+        im = np.asarray(imgs[i])
+        if im.ndim == 3 and im.shape[2] == 4:
+            im = im[..., :3]
+        if im.shape[1] > width:                          # cheap integer decimation
+            step = int(np.ceil(im.shape[1] / width))
+            im = im[::step, ::step]
+        iio.imwrite(out_dir / f"frame-{j}.png", im)
+    return len(keep), fps
+
+
+def append_animated_page(pdf_path, movie, *, fps=None, caption="", timeout_s: float = 300.0):
+    """Append a page carrying a real ``\animategraphics`` animation to a report PDF.
+
+    A browser-printed PDF can only ever show one still of a movie. LaTeX's ``animate``
+    package embeds the frames and plays them in Acrobat and compatible viewers -- the same
+    mechanism the manuscript's propagation figure uses -- so the movie is built as a
+    one-page PDF here and concatenated onto the report. Returns the PDF path; when pdflatex,
+    the animate package, or pypdf is missing the report is returned unchanged and a warning
+    says why (the HTML still animates)."""
+    import shutil
+    import subprocess
+    import tempfile
+    import warnings
+
+    pdf_path = Path(pdf_path)
+    if not shutil.which("pdflatex"):
+        warnings.warn("no pdflatex: the PDF gets no animation page (the HTML still animates)")
+        return pdf_path
+    try:
+        from pypdf import PdfReader, PdfWriter
+    except ImportError:
+        try:
+            from PyPDF2 import PdfReader, PdfWriter          # older name
+        except ImportError:
+            warnings.warn("no pypdf: cannot append the animation page to the PDF")
+            return pdf_path
+    with tempfile.TemporaryDirectory(prefix="skull_transparency_anim_") as td:
+        td = Path(td)
+        n, detected = _movie_frames(movie, td)
+        if n < 2:
+            warnings.warn(f"{movie}: fewer than two frames, no animation page appended")
+            return pdf_path
+        rate = float(fps or detected)
+        # A caption is prose from the caller, so every LaTeX special has to be escaped --
+        # a bare underscore in something like "make_propagation_movie.py" is enough to
+        # abort the whole page.
+        cap = str(caption or "")
+        for a, b in (("\\", " "), ("&", r"\&"), ("%", r"\%"), ("$", r"\$"), ("#", r"\#"),
+                     ("_", r"\_"), ("{", r"\{"), ("}", r"\}"), ("~", r"\textasciitilde{}"),
+                     ("^", r"\textasciicircum{}")):
+            cap = cap.replace(a, b)
+        (td / "anim.tex").write_text(
+            "\\documentclass[a4paper]{article}\n"
+            "\\usepackage[margin=1.6cm]{geometry}\\usepackage{graphicx}\\usepackage{animate}\n"
+            "\\pagestyle{empty}\\setlength{\\parindent}{0pt}\n"
+            "\\begin{document}\n"
+            "{\\large\\bfseries Wave propagation}\\\\[4pt]\n"
+            f"\\animategraphics[controls,loop,width=\\linewidth]{{{rate:g}}}{{frame-}}{{0}}{{{n - 1}}}\n"
+            f"\\\\[6pt]\\small {cap}\n"
+            "\\end{document}\n")
+        for _ in range(2):
+            r = subprocess.run(["pdflatex", "-interaction=nonstopmode", "-halt-on-error", "anim.tex"],
+                               cwd=td, capture_output=True, text=True, timeout=timeout_s)
+        anim = td / "anim.pdf"
+        if r.returncode != 0 or not anim.exists():
+            tail = "\n".join((r.stdout or "").strip().splitlines()[-6:])
+            warnings.warn(f"pdflatex could not build the animation page; the PDF is "
+                          f"otherwise complete. Last output:\n{tail}")
+            return pdf_path
+        w = PdfWriter()
+        for page in PdfReader(str(pdf_path)).pages:
+            w.add_page(page)
+        for page in PdfReader(str(anim)).pages:
+            w.add_page(page)
+        with open(pdf_path, "wb") as fh:
+            w.write(fh)
+    return pdf_path
+
+
+def forward_peak_volumes(forward_dir, out_npz=None):
+    """Reduce a solved forward pair to the small artifact the report needs.
+
+    Each solved run holds gigabytes of focal-box time traces; all the comparison figure
+    wants is the peak |p| at every box point. This writes (or returns) those two volumes
+    plus the box geometry, so the traces can be deleted afterwards and the figure still
+    regenerates in a second. Returns a dict with ``transcranial``/``free_field`` peak
+    volumes (Pa, dense box grid), ``origin_vox``, and ``dx_mm``."""
+    from .forward import load_focal_box
+    forward_dir = Path(forward_dir)
+    out = {}
+    for label in ("transcranial", "free_field"):
+        run = forward_dir / label
+        if not (run / "genout.dat").exists():
+            continue
+        traces, box, info = load_focal_box(run)
+        peak = np.abs(np.asarray(traces, float)).max(axis=0)      # peak |p| per point (Pa)
+        box = np.asarray(box, np.int64)
+        lo = box.min(0)
+        shape = tuple((box.max(0) - lo + 1).tolist())
+        vol = np.zeros(shape, float)
+        vol[tuple((box - lo).T)] = peak
+        out[label] = vol
+        out["origin_vox"] = lo.astype(float)
+        out["dx_mm"] = float(info.get("dx_mm", 1.0))
+    if out_npz and out:
+        np.savez_compressed(out_npz, **out)
+    return out
+
+
+def _forward_figure(peaks, placement, reg, comparison=None):
+    """Transcranial vs free-field focal fields on one colour scale.
+
+    Rows are the two media, columns the three planes through the target. Same source, same
+    grid, same drive -- only the medium differs -- so the panels are directly comparable:
+    what the skull costs on target, and where it puts the energy instead."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    if "transcranial" not in peaks or "free_field" not in peaks:
+        return None
+    dx = float(peaks["dx_mm"])
+    lo = np.asarray(peaks["origin_vox"], float)
+    # The target must be taken in the FORWARD run's own grid: that pair may have been solved
+    # in a different domain from the bundle (a bigger water margin, say, to fit the bowl),
+    # so the bundle's voxel indexing does not apply to the box.
+    tgt_v = None
+    if comparison:
+        tv = comparison.get("transcranial", {}).get("target_vox")
+        if tv is not None:
+            tgt_v = np.asarray(tv, float)
+    if tgt_v is None:
+        tgt_v = np.asarray(reg.mni_to_fullres(np.asarray(placement.target_mni_mm, float)), float)
+    ctr = tgt_v - lo                                    # target in box-index coordinates
+    if np.any(ctr < -1) or np.any(ctr > np.asarray(peaks["transcranial"]).shape) + 1:
+        pass                                            # (checked below, per-plane clipping)
+    vmax = max(float(np.asarray(peaks[k]).max()) for k in ("transcranial", "free_field"))
+    planes = (("sagittal", 0, 1, 2, "y (mm)", "z (mm)"),
+              ("coronal", 1, 0, 2, "x (mm)", "z (mm)"),
+              ("axial", 2, 0, 1, "x (mm)", "y (mm)"))
+    fig, axes = plt.subplots(2, 3, figsize=(13.0, 7.4))
+    for r, label in enumerate(("transcranial", "free_field")):
+        vol = np.asarray(peaks[label], float)
+        for c, (name, n_ax, a_ax, b_ax, xl, yl) in enumerate(planes):
+            ax = axes[r, c]
+            idx = int(round(np.clip(ctr[n_ax], 0, vol.shape[n_ax] - 1)))
+            sl = np.take(vol, idx, axis=n_ax)
+            if a_ax > b_ax:
+                sl = sl.T
+            ext = [(-ctr[a_ax]) * dx, (vol.shape[a_ax] - ctr[a_ax]) * dx,
+                   (-ctr[b_ax]) * dx, (vol.shape[b_ax] - ctr[b_ax]) * dx]
+            im = ax.imshow(sl.T, origin="lower", extent=ext, cmap="inferno", vmin=0.0,
+                           vmax=vmax, aspect="equal", interpolation="bilinear")
+            ax.scatter([0], [0], marker="+", s=120, c="cyan", linewidths=1.6)
+            pk = np.unravel_index(int(np.argmax(vol)), vol.shape)
+            ax.scatter([(pk[a_ax] - ctr[a_ax]) * dx], [(pk[b_ax] - ctr[b_ax]) * dx],
+                       marker="x", s=70, c="white", linewidths=1.4)
+            if r == 0:
+                ax.set_title(name, fontsize=10)
+            ax.set_xlabel(xl, fontsize=8)
+            ax.set_ylabel(("through the skull" if r == 0 else "free field") + f"\n{yl}"
+                          if c == 0 else yl, fontsize=8)
+            ax.tick_params(labelsize=7)
+    fig.colorbar(im, ax=axes, fraction=0.016, pad=0.01).set_label("peak |p| (Pa)", fontsize=9)
+    sub = ""
+    if comparison:
+        sub = (f"  —  at the target {comparison['transcranial']['peak_at_target_pa']:.2f} Pa "
+               f"vs {comparison['free_field']['peak_at_target_pa']:.2f} Pa "
+               f"({comparison.get('transmission_at_target', float('nan')):.2f}x, "
+               f"{comparison.get('transmission_at_target_db', float('nan')):+.1f} dB)")
+    fig.suptitle("Transcranial vs free field: peak pressure around the target"
+                 " (cyan + target, white x peak)" + sub, fontsize=11)
+    return fig
+
+
 def write_report(tmap, placement, out_html, *, title="Skull transparency placement",
                  target_name=None, bowl_radius_mm=32.0, theta_max_deg=35.0,
                  pdf=None, bundle=None, atlas=None, atlas_ids=None,
-                 atlas_label="target structure") -> Path:
+                 atlas_label="target structure", movie=None, movie_caption=None,
+                 forward=None) -> Path:
     """Write the placement report; returns the path written.
 
     ``bowl_radius_mm`` / ``theta_max_deg`` parameterise the objective, alternates, and
@@ -644,7 +847,17 @@ def write_report(tmap, placement, out_html, *, title="Skull transparency placeme
     ``atlas`` (a label-volume path or a loaded NIfTI image) with ``atlas_ids`` (the label
     values that make up the target structure) to draw the structure itself -- e.g. the
     Allen cerebellum warped into a mouse skull's frame. Without a bundle the section is
-    skipped; with a bundle but no atlas the target is drawn as a sphere."""
+    skipped; with a bundle but no atlas the target is drawn as a sphere.
+
+    ``movie`` (an mp4/gif path, or a directory of frame PNGs) adds the wave-propagation
+    animation: it plays inline in the HTML, and in the PDF it is appended as a page built
+    with LaTeX's ``animate`` package, so it plays in Acrobat and compatible viewers exactly
+    as the manuscript's propagation figure does.
+
+    ``forward`` adds the transcranial-vs-free-field section: pass the directory of a solved
+    forward pair (or a ``focal_peaks.npz`` written by :func:`forward_peak_volumes`, with
+    ``forward.json`` beside it). The section reports what the skull costs at the target and
+    shows where it puts the energy instead."""
     want_pdf = (str(out_html).lower().endswith(".pdf")) if pdf is None else bool(pdf)
     out_html = Path(out_html).with_suffix(".html")
     from .position_tool import preview_placement
@@ -692,6 +905,24 @@ def write_report(tmap, placement, out_html, *, title="Skull transparency placeme
                                        atlas_label)
             if fig_t3d is not None:
                 png_t3d = _fig_png(fig_t3d)
+    png_fwd, fwd_json = None, None
+    if forward is not None:
+        fp = Path(forward)
+        peaks, jpath = {}, None
+        if fp.is_dir():
+            jpath = fp / "forward.json"
+            npz = fp / "focal_peaks.npz"
+            peaks = dict(np.load(npz)) if npz.exists() else forward_peak_volumes(fp)
+        elif fp.suffix == ".npz":
+            peaks = dict(np.load(fp))
+            jpath = fp.with_name("forward.json")
+        if jpath is not None and jpath.exists():
+            import json as _json
+            fwd_json = _json.loads(jpath.read_text())
+        if peaks:
+            fig_fwd = _forward_figure(peaks, placement, tmap.registration, fwd_json)
+            if fig_fwd is not None:
+                png_fwd = _fig_png(fig_fwd)
     png_3d = _fig_png(_map3d_figure(tmap))
     png_sc = _fig_png(_scene3d_figure(tmap, placement, bowl_radius_mm))
     tmp = out.with_suffix(".placement.png")
@@ -742,6 +973,15 @@ def write_report(tmap, placement, out_html, *, title="Skull transparency placeme
                   "hair, hardware, or a frame blocks the optimum. Columns follow the "
                   "manuscript Table 1 (window, incidence, distance).</p>"
                   ) if arows else "<p>(no separated alternatives found)</p>"
+    movie_html = ""
+    if movie is not None and Path(movie).exists() and Path(movie).suffix.lower() == ".gif":
+        b64 = base64.b64encode(Path(movie).read_bytes()).decode()
+        movie_html = (f'<img src="data:image/gif;base64,{b64}" alt="wave propagation"/>\n')
+    elif movie is not None and Path(movie).exists():
+        gif = Path(movie).with_suffix(".gif")             # prefer a sibling gif for the HTML
+        if gif.exists():
+            b64 = base64.b64encode(gif.read_bytes()).decode()
+            movie_html = (f'<img src="data:image/gif;base64,{b64}" alt="wave propagation"/>\n')
     anatomy_html = ""
     if png_ortho:
         what = atlas_label if (atlas is not None and atlas_ids is not None) else "target"
@@ -756,7 +996,47 @@ def write_report(tmap, placement, out_html, *, title="Skull transparency placeme
               'the structure inside a semi-transparent skull, with the chosen window and '
               'the beam axis marked. Slices and coordinates are in the frame named in the '
               'footer.</p>\n')
+    forward_html = ""
+    if png_fwd or fwd_json:
+        rows_f = []
+        if fwd_json:
+            tc, ff = fwd_json["transcranial"], fwd_json["free_field"]
+            rows_f = [("Pressure at the target",
+                       f"{tc['peak_at_target_pa']:.2f} Pa through the skull vs "
+                       f"{ff['peak_at_target_pa']:.2f} Pa free field"),
+                      ("Transmission at the target",
+                       f"{fwd_json.get('transmission_at_target', float('nan')):.2f}x "
+                       f"({fwd_json.get('transmission_at_target_db', float('nan')):+.1f} dB)"),
+                      ("Peak anywhere in the box",
+                       f"{tc['peak_pa']:.2f} Pa vs {ff['peak_pa']:.2f} Pa free field"),
+                      ("That peak's distance from the target",
+                       f"{tc['focal_shift_mm']:.2f} mm vs {ff['focal_shift_mm']:.2f} mm free field"),
+                      ("-6 dB focal width",
+                       " x ".join(f"{v:.2f}" for v in tc["fwhm_mm"]) + " mm vs " +
+                       " x ".join(f"{v:.2f}" for v in ff["fwhm_mm"]) + " mm free field")]
+        trs_f = "\n".join(f"<tr><td>{k}</td><td>{v}</td></tr>" for k, v in rows_f)
+        forward_html = (f"<h2>{_n if False else '{n_fwd}'} · Transcranial vs free field</h2>\n"
+                        + (f"<table>{trs_f}</table>\n" if trs_f else "")
+                        + (f'<img src="data:image/png;base64,{png_fwd}" alt="forward pair"/>\n'
+                           if png_fwd else "")
+                        + '<p class="note">Two forward solves on one grid with the same source '
+                          'and drive, differing only in the medium: the skull, then water '
+                          'everywhere. Their ratio at the target is the insertion loss of this '
+                          'placement. Quote the at-target number, not the box maximum -- a '
+                          'skull that aberrates more than it absorbs can put a brighter spot '
+                          'off target and make the maximum look like a gain.</p>\n')
     _n = 2 + (1 if anatomy_html else 0)
+    if forward_html:                          # numbered in DOCUMENT order: forward, then movie
+        forward_html = forward_html.replace("{n_fwd}", str(_n))
+        _n += 1
+    if movie_html or movie is not None:
+        cap = movie_caption or ("The outward wave leaving the target and sweeping through "
+                                "the skull. It plays in this HTML, and in the PDF on the "
+                                "appended animation page (Acrobat and compatible viewers; "
+                                "other readers show one frame).")
+        movie_html = (f"<h2>{_n} · Wave propagation</h2>\n" + movie_html
+                      + f'<p class="note">{cap}</p>\n')
+        _n += 1
     n_surf, n_inc, n_obj, n_alt, n_meth = _n, _n + 1, _n + 2, _n + 3, _n + 4
     stamp = datetime.date.today().isoformat()
     html = f"""<!doctype html><html><head><meta charset="utf-8"><title>{title}</title>
@@ -781,6 +1061,8 @@ def write_report(tmap, placement, out_html, *, title="Skull transparency placeme
 <table>{trs}</table>
 
 {anatomy_html}
+{forward_html}
+{movie_html}
 <h2>{n_surf} · Surface coupling and bone transmission</h2>
 <img src="data:image/png;base64,{png_3d}" alt="transparency map 3-D"/>
 <img src="data:image/png;base64,{png_t}" alt="transparency unwrapped"/>
@@ -849,4 +1131,10 @@ print to PDF for archival.</footer>
 </body></html>
 """
     out.write_text(html)
-    return html_to_pdf(out) if want_pdf else out
+    if not want_pdf:
+        return out
+    pdf = html_to_pdf(out)
+    if movie is not None and Path(movie).exists():
+        append_animated_page(pdf, movie, caption=(movie_caption or
+                             "Outward wave from the target through the skull."))
+    return pdf

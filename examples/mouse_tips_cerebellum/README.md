@@ -75,6 +75,13 @@ skull with the chosen window and beam axis, the manuscript's Figure-1 scene rebu
 bundle. The remaining sections follow the human reports: surface coupling, beam incidence
 against the legality limit, the placement objective, ranked alternative windows, and methods.
 
+It then carries **transcranial vs free field** (the table above plus the two focal fields
+on one colour scale — a clean free-field focus against the dimmer, fragmented transcranial
+one) and the **wave-propagation animation**: it plays inline in the HTML, and the PDF gets
+an appended page built with LaTeX's `animate` package, so it plays in Acrobat exactly as
+the manuscript's propagation figure does. Both sections appear only when their inputs
+exist, so `place` still works on its own.
+
 The anatomy section is generic: `write_report(..., bundle=bundle, atlas=<label volume>,
 atlas_ids=<ids>)`. Without an atlas the target is drawn as a sphere; without a bundle the
 section is skipped. Panels are framed on the head but cut through the target, and are
