@@ -80,6 +80,39 @@ atlas_ids=<ids>)`. Without an atlas the target is drawn as a sphere; without a b
 section is skipped. Panels are framed on the head but cut through the target, and are
 sampled in world mm, so they stay correct for any grid pose and either species' frame.
 
+## Transcranial vs free field
+
+`run_forward_comparison.py` drives the bowl forward twice on one grid — once through the
+skull, once with the skull replaced by water — and compares the pressure at the target.
+Because a full-size TIPS (80 mm focal length) would need a ~110 mm domain at the 0.128 mm
+pitch this case requires, the bowl is **geometrically similar**: the same 35.1° half-angle
+and f/0.87, at an 18 mm radius of curvature that fits. It crosses the same skull at the same
+angles; only the wavefront curvature at the bone differs, which is second order for bone a
+tenth of a wavelength thick.
+
+| | transcranial | free field |
+|---|---|---|
+| pressure **at the target** | 8.07 Pa | 13.41 Pa |
+| peak anywhere in the ±3 mm box | 23.75 Pa | 13.67 Pa |
+| distance of that peak from the target | 2.13 mm | 0.84 mm |
+
+**Insertion loss at the target is 0.60× (−4.4 dB).** But the skull does not simply absorb
+that energy — it *moves* it: the hottest point in the box is 1.7× brighter than the
+free-field focus and sits 2.1 mm away, a coherent interference maximum rather than a
+focus. At 1 MHz the mouse calvaria is a tenth of a wavelength thick, so it is a poor
+absorber and a strong aberrator, which is the same story the 18 dB spread in the
+transparency map tells. Quoting the box maximum alone would report a spurious *gain*; the
+at-target number is the one that doses the cerebellum.
+
+Two checks that the pair is trustworthy: the free-field focal gain matches the analytic
+focused-bowl value (2π/λ)·R·(1−cos θ½) = 13.36 Pa per 1 Pa of surface drive to **0.4 %**,
+and neither peak lies on the recording-box boundary. The free-field focus sitting 0.84 mm
+proximal of the geometric target is the expected pull for a bowl of this low Fresnel number.
+
+Caveat: the hot-spot position is set by coherent interference, so it shifts with frequency,
+pose, and drive bandwidth — treat 2.1 mm as "the peak leaves the target", not as a
+reproducible coordinate.
+
 ## Caveats
 
 - **The focus is longer than the cerebellum.** At f/0.87 and 1 MHz the TIPS focal spot is
