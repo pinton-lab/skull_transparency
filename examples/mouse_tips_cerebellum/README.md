@@ -134,3 +134,15 @@ reproducible coordinate.
   the model is a skull-in-water problem, not an in-vivo one.
 - The report writes coordinates in the skull's own frame (`maga_aligned_native_ras_mm`) and
   omits the EEG 10-20 overlay, which is human-only; see the frame gating in `report.py`.
+
+## Running it in Colab
+
+[`notebooks/mouse_tips_cerebellum_colab.ipynb`](../../notebooks/mouse_tips_cerebellum_colab.ipynb)
+reproduces this case on a free Colab GPU and downloads the same report at the end. The two
+inputs it needs — the 200 µm sound-speed volume and the Allen annotation warped into the
+skull frame — are ~7 MB together, staged in `runs/mouse_inputs_v1/` with checksums, and
+fetched from whatever location `MOUSE_DATA_URL` points at.
+
+Verified end to end: the notebook reproduces the numbers on this page exactly (window,
+incidence, and the −4.4 dB at-target insertion loss) in about four minutes. It omits only
+the propagation-movie section, which needs a volume-recorder re-run and a TeX installation.
