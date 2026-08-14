@@ -28,6 +28,13 @@ _MANUSCRIPT = ('Pinton, "Whole-skull acoustic transparency from a single time-re
                'solve for reciprocity-based transducer placement and aperture optimization '
                'in transcranial focused ultrasound" (2026)')
 
+def _frame_is_mni(reg) -> bool:
+    """True when the bundle's world frame is MNI, i.e. the human atlas conventions
+    (EEG 10-20 sites, "MNI mm" axis labels) actually apply. A subject or non-human
+    frame -- e.g. a mouse skull's own aligned-native RAS -- gets neither."""
+    return "mni" in str(getattr(reg, "world_frame", "mni_ras_mm") or "").lower()
+
+
 _NLON, _NLAT = 240, 120      # coarse enough that an ECCENTRIC target's far side
 #                              (sparse angular sampling) still fills its bins
 _SIG = 1.5                    # unwrap smoothing (bins)
@@ -200,8 +207,9 @@ class _UnwrapData:
         self.alon, self.alat = (_lonlat(rhat[self.alt_idx], self.S, self.A, self.L)
                                 if self.alt_idx else (np.array([]), np.array([])))
         self.tolerance_mm = _tolerance_mm(P_mm, self.obj, win_vox * dx)
+        self.is_mni = _frame_is_mni(reg)
         self.sites, self.slon, self.slat = [], [], []
-        for name, pos in EEG_SITES_MNI.items():
+        for name, pos in (EEG_SITES_MNI.items() if self.is_mni else ()):
             d = np.asarray(reg.mni_to_fullres(np.asarray(pos, float)), float) - tgt_vox
             lo, la = _lonlat((d / np.linalg.norm(d))[None, :], self.S, self.A, self.L)
             self.sites.append(name)
@@ -228,7 +236,8 @@ def _unwrap_panel(u, field, vlim, cmap, title, clabel, contour_at=None):
         bc = np.linspace(-90, 90, _NLAT + 1)[:-1] + 90.0 / _NLAT
         ax.contour(lc, bc, np.where(u.alpha.T > 0, field.T, np.nan),
                    levels=[contour_at], colors="k", linestyles="--", linewidths=1.0)
-    ax.scatter(u.slon, u.slat, s=10, c="white", edgecolors="k", linewidths=0.4, zorder=5)
+    if u.sites:
+        ax.scatter(u.slon, u.slat, s=10, c="white", edgecolors="k", linewidths=0.4, zorder=5)
     for n, lo, la in zip(u.sites, u.slon, u.slat):
         ax.annotate(n, (lo, la), textcoords="offset points", xytext=(3, 3), fontsize=6.5,
                     color="white", zorder=6,
@@ -364,11 +373,68 @@ def _map3d_figure(tmap):
     return fig
 
 
+#: HTML->PDF backends, tried in order. WeasyPrint if it is importable, else a headless
+#: Chrome/Chromium (which honours the report's @media print rules, so the PDF is the page
+#: you see), else wkhtmltopdf.
+_CHROME_CANDIDATES = ("google-chrome", "google-chrome-stable", "chromium",
+                      "chromium-browser", "/opt/google/chrome/chrome")
+
+
+def html_to_pdf(html_path, pdf_path=None, *, timeout_s: float = 180.0) -> Path:
+    """Render a report HTML file to PDF, preserving its print layout.
+
+    The report is self-contained (figures are embedded as data URIs), so the conversion
+    needs no network and no asset paths. Returns the PDF path; raises RuntimeError with an
+    actionable message when no backend is installed."""
+    import os
+    import shutil
+    import subprocess
+    import tempfile
+
+    html = Path(html_path)
+    pdf = Path(pdf_path) if pdf_path else html.with_suffix(".pdf")
+    try:                                        # 1) WeasyPrint (pure-Python, no browser)
+        from weasyprint import HTML as _WeasyHTML
+        _WeasyHTML(filename=str(html)).write_pdf(str(pdf))
+        if pdf.exists() and pdf.stat().st_size:
+            return pdf
+    except ImportError:
+        pass
+    for cand in _CHROME_CANDIDATES:             # 2) headless Chrome / Chromium
+        exe = shutil.which(cand) or (cand if os.path.exists(cand) else None)
+        if not exe:
+            continue
+        with tempfile.TemporaryDirectory(prefix="skull_transparency_pdf_") as profile:
+            subprocess.run([exe, "--headless=new", "--disable-gpu", "--no-sandbox",
+                            f"--user-data-dir={profile}", "--no-pdf-header-footer",
+                            "--virtual-time-budget=20000", f"--print-to-pdf={pdf}",
+                            html.resolve().as_uri()],
+                           capture_output=True, text=True, timeout=timeout_s)
+        if pdf.exists() and pdf.stat().st_size:
+            return pdf
+    exe = shutil.which("wkhtmltopdf")           # 3) wkhtmltopdf
+    if exe:
+        subprocess.run([exe, "--enable-local-file-access", str(html), str(pdf)],
+                       capture_output=True, text=True, timeout=timeout_s)
+        if pdf.exists() and pdf.stat().st_size:
+            return pdf
+    raise RuntimeError(
+        "no HTML-to-PDF backend found. Install one of: weasyprint (pip install weasyprint), "
+        "Google Chrome / Chromium, or wkhtmltopdf. The HTML report at "
+        f"{html} is complete and prints to PDF from any browser.")
+
+
 def write_report(tmap, placement, out_html, *, title="Skull transparency placement",
-                 target_name=None, bowl_radius_mm=32.0, theta_max_deg=35.0) -> Path:
-    """Write the self-contained HTML report; returns its path. ``bowl_radius_mm`` /
-    ``theta_max_deg`` parameterise the objective, alternates, and access fraction (pass
-    the values the placement used)."""
+                 target_name=None, bowl_radius_mm=32.0, theta_max_deg=35.0,
+                 pdf=None) -> Path:
+    """Write the placement report; returns the path written.
+
+    ``bowl_radius_mm`` / ``theta_max_deg`` parameterise the objective, alternates, and
+    access fraction (pass the values the placement used). ``pdf=True`` also renders a PDF
+    beside the HTML and returns *that* path; ``pdf=None`` (the default) infers it from an
+    ``.pdf`` suffix on ``out_html``, so ``--out report.pdf`` does what it looks like."""
+    want_pdf = (str(out_html).lower().endswith(".pdf")) if pdf is None else bool(pdf)
+    out_html = Path(out_html).with_suffix(".html")
     from .position_tool import preview_placement
     import matplotlib
     matplotlib.use("Agg")
@@ -376,9 +442,10 @@ def write_report(tmap, placement, out_html, *, title="Skull transparency placeme
     out = Path(out_html)
     tgt = np.asarray(placement.target_mni_mm, float)
     win = np.asarray(placement.window_center_mni_mm, float)
-    site, site_mm = nearest_eeg_site(win)
 
     u = _UnwrapData(tmap, placement, bowl_radius_mm, theta_max_deg)
+    wf = str(getattr(tmap.registration, "world_frame", "mni_ras_mm") or "mni_ras_mm")
+    frame_lbl = "MNI" if u.is_mni else f"world ({wf})"
     vt = tuple(np.percentile(u.db, [25.0, 99.0]))
     png_t = _fig_png(_unwrap_panel(
         u, u.fld_t, vt, "inferno",
@@ -402,9 +469,10 @@ def write_report(tmap, placement, out_html, *, title="Skull transparency placeme
 
     fmt = lambda v: "(" + ", ".join(f"{x:.1f}" for x in np.asarray(v, float)) + ") mm"
     rows = [
-        ("Target" + (f" ({target_name})" if target_name else ""), fmt(tgt) + " MNI"),
-        ("Window centre", fmt(win) + " MNI"),
-        ("Window ≈ EEG 10-20 site", f"{site}  ({site_mm:.0f} mm away)"),
+        ("Target" + (f" ({target_name})" if target_name else ""), f"{fmt(tgt)} {frame_lbl}"),
+        ("Window centre", f"{fmt(win)} {frame_lbl}"),
+        *((("Window ≈ EEG 10-20 site",
+            "%s  (%.0f mm away)" % nearest_eeg_site(win)),) if u.is_mni else ()),
         ("Window-to-target distance", f"{np.linalg.norm(win - tgt):.1f} mm"),
         ("Beam incidence at window", f"{float(placement.incidence_deg):.1f} deg "
                                      f"(legal limit {theta_max_deg:.0f} deg)"),
@@ -425,14 +493,17 @@ def write_report(tmap, placement, out_html, *, title="Skull transparency placeme
     arows = []
     for rank, i in enumerate(u.alt_idx, start=2):
         wm = np.asarray(reg.fullres_to_mni(np.asarray(tmap.surf_vox, float)[i]), float)
-        asite, adist = nearest_eeg_site(wm)
-        arows.append(f"<tr><td>{rank}</td><td>{fmtv(wm)} mm MNI</td>"
-                     f"<td>{asite} ({adist:.0f} mm)</td>"
+        eeg = ""
+        if u.is_mni:
+            asite, adist = nearest_eeg_site(wm)
+            eeg = f"<td>{asite} ({adist:.0f} mm)</td>"
+        arows.append(f"<tr><td>{rank}</td><td>{fmtv(wm)} mm</td>{eeg}"
                      f"<td>{100 * u.obj[i]:.0f}%</td>"
                      f"<td>{u.inc_deg[i]:.0f}°</td>"
-                     f"<td>{float(np.asarray(tmap.rad_mm, float)[i]):.0f} mm</td></tr>")
-    alts_table = ("<table><tr><td>#</td><td>window (MNI)</td><td>≈ EEG site</td>"
-                  "<td>objective vs best</td><td>incidence</td><td>target distance</td>"
+                     f"<td>{float(np.asarray(tmap.rad_mm, float)[i]):.1f} mm</td></tr>")
+    alts_table = (f"<table><tr><td>#</td><td>window ({frame_lbl})</td>"
+                  + ("<td>≈ EEG site</td>" if u.is_mni else "")
+                  + "<td>objective vs best</td><td>incidence</td><td>target distance</td>"
                   "</tr>" + "".join(arows) + "</table>"
                   "<p class=\"note\">Ranked fallbacks (orange stars on the maps above), "
                   "each ≥30 mm from the chosen window and from each other — for when "
@@ -521,7 +592,7 @@ window and from each other.</li>
 target→patch directions; amplitude-weighted wrapped histograms; grey = no coherent
 direct-arrival coverage.</li>
 </ul></details>
-<footer>skull-transparency report — generated {stamp}. Coordinates are MNI RAS mm. The map
+<footer>skull-transparency report — generated {stamp}. Coordinates are {frame_lbl} RAS mm. The map
 comes from one full-wave time-reversal solve (virtual source at the target); placement and
 every figure here are post-processing on that recorded field. Method, conventions, and the
 figure/equation/table numbers cited above: {_MANUSCRIPT}. This file is self-contained —
@@ -529,4 +600,4 @@ print to PDF for archival.</footer>
 </body></html>
 """
     out.write_text(html)
-    return out
+    return html_to_pdf(out) if want_pdf else out

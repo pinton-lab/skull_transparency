@@ -253,6 +253,7 @@ def _cmd_report(args):
           if args.transducer else st.BowlConstraints(focal_length_mm=args.focal_length or 60.0))
     pl = st.place_bowl(tmap, bc)
     out = write_report(tmap, pl, args.out, target_name=tname,
+                       pdf=(True if args.pdf else None),
                        title=args.title or (f"Placement report — {tname}" if tname
                                             else "Placement report"))
     print(f"wrote {out}")
@@ -381,7 +382,9 @@ def build_parser():
     sp = sub.add_parser("report",
                         help="self-contained HTML placement report (map + pose + coordinates)")
     add_source(sp)
-    sp.add_argument("--out", default="placement_report.html")
+    sp.add_argument("--out", default="placement_report.html",
+                    help="output path; an .pdf suffix (or --pdf) also renders a PDF")
+    sp.add_argument("--pdf", action="store_true", help="render a PDF as well as the HTML")
     sp.add_argument("--title", default=None)
     sp.set_defaults(func=_cmd_report)
     return p

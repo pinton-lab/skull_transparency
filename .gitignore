@@ -62,3 +62,9 @@ venv/
 
 # ── Claude Code local state ──
 .claude/
+
+# Example outputs are reproducible from the scripts (bundles are tens of MB,
+# reports are ~1 MB of embedded figures) — regenerate, don't version.
+examples/**/bundle/
+examples/**/report_*.html
+examples/**/report_*.pdf
