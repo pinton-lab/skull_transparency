@@ -68,3 +68,6 @@ venv/
 examples/**/bundle/
 examples/**/report_*.html
 examples/**/report_*.pdf
+examples/**/propagation_*.mp4
+examples/**/propagation_*.gif
+examples/**/forward/
