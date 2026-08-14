@@ -338,6 +338,209 @@ def _scene3d_figure(tmap, placement, bowl_radius_mm):
     return fig
 
 
+# --------------------------------------------------------------------------- anatomy
+#: Anatomical views for the 3-D target scene, as (label, elevation, azimuth). Azimuth is
+#: measured from +x in the xy plane, so in a RAS world frame (+x right, +y anterior,
+#: +z superior) 180 looks from the left, -90 from behind, and a high elevation from above.
+_ANAT_VIEWS = (("left lateral", 8.0, 180.0), ("posterior", 8.0, -90.0), ("dorsal", 72.0, -90.0))
+
+#: (name, plane-normal axis, horizontal axis, vertical axis, x label, y label)
+_ORTHO_PLANES = (("sagittal", 0, 1, 2, "y  P-A (mm)", "z  I-S (mm)"),
+                 ("coronal", 1, 0, 2, "x  L-R (mm)", "z  I-S (mm)"),
+                 ("axial", 2, 0, 1, "x  L-R (mm)", "y  P-A (mm)"))
+
+
+def _plane_points(center_w, n_axis, a_axis, b_axis, half_mm, n=420):
+    """``(n, n, 3)`` world-mm points on the anatomical plane through ``center_w``, plus the
+    matplotlib ``extent``. Sampling in WORLD mm (not voxel indices) keeps the panels
+    anatomically correct and mm-square whatever pose the simulation grid was built in."""
+    a = np.linspace(-half_mm, half_mm, n) + center_w[a_axis]
+    b = np.linspace(-half_mm, half_mm, n) + center_w[b_axis]
+    A, B = np.meshgrid(a, b, indexing="xy")
+    P = np.empty(A.shape + (3,), float)
+    P[..., n_axis] = center_w[n_axis]
+    P[..., a_axis] = A
+    P[..., b_axis] = B
+    return P, (a[0], a[-1], b[0], b[-1])
+
+
+def _sample_volume(vol, reg, P, order=1, fill=np.nan):
+    """Sample a bundle volume (indexed in full-resolution voxels) at world-mm points."""
+    from scipy.ndimage import map_coordinates
+    v = np.asarray(reg.mni_to_fullres(P.reshape(-1, 3)), float).T
+    return map_coordinates(np.asarray(vol, float), v, order=order, mode="constant",
+                           cval=fill).reshape(P.shape[:2])
+
+
+def _atlas_mask_on_plane(atlas_img, ids, P):
+    """Nearest-neighbour atlas membership on a plane, reading only the sub-block the plane
+    touches — a 10 um atlas is far too large to hold in memory."""
+    inv = np.linalg.inv(np.asarray(atlas_img.affine, float))
+    v = inv[:3, :3] @ P.reshape(-1, 3).T + inv[:3, 3:4]
+    vi = np.rint(v).astype(int)
+    shape = np.array(atlas_img.shape[:3])
+    ok = np.all((vi >= 0) & (vi < shape[:, None]), axis=0)
+    out = np.zeros(vi.shape[1], bool)
+    if ok.any():
+        sub = vi[:, ok]
+        lo, hi = sub.min(1), sub.max(1) + 1
+        block = np.asarray(atlas_img.dataobj[lo[0]:hi[0], lo[1]:hi[1], lo[2]:hi[2]])
+        out[ok] = np.isin(block[tuple(sub - lo[:, None])], np.asarray(ids))
+    return out.reshape(P.shape[:2])
+
+
+def _ortho_figure(tmap, placement, c_map, atlas_img=None, atlas_ids=None,
+                  atlas_label="target structure", half_mm=None, c0=None):
+    """Sagittal / coronal / axial cuts through the target: the subject's sound-speed volume
+    as the greyscale background, the atlas structure (when supplied) overlaid, and the
+    target, chosen window, and beam axis marked."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    reg = tmap.registration
+    tgt = np.asarray(placement.target_mni_mm, float)
+    win = np.asarray(placement.window_center_mni_mm, float)
+    # Window from the medium's REFERENCE speed, not the array minimum: a map can carry two
+    # water values (e.g. a benchmark volume at 1500 m/s padded with the pipeline's 1540 m/s
+    # coupling water), and stretching from the minimum would draw that seam as a box around
+    # the head. Everything at or below water renders black; the ramp spans water -> bone.
+    c0 = float(np.nanmin(c_map)) if c0 is None else float(c0)
+    # Centre the panels on the HEAD but cut each plane through the TARGET: centring on an
+    # eccentric target (a mouse cerebellum, say) wastes half of every panel on empty water.
+    surf = np.asarray(tmap.surf_mni_mm() if tmap.registration is not None else tmap.surf_vox,
+                      float)
+    lo, hi = surf.min(0), surf.max(0)
+    cen = (lo + hi) / 2.0
+    if half_mm is None:
+        half_mm = max(0.55 * float((hi - lo).max()),
+                      1.08 * float(np.abs(tgt - cen).max()),
+                      1.08 * float(np.abs(win - cen).max()))
+    fig, axes = plt.subplots(1, 3, figsize=(14.0, 4.9))
+    for ax, (name, n_ax, a_ax, b_ax, xl, yl) in zip(axes, _ORTHO_PLANES):
+        centre = cen.copy()
+        centre[n_ax] = tgt[n_ax]              # the plane itself passes through the target
+        P, ext = _plane_points(centre, n_ax, a_ax, b_ax, half_mm)
+        sl = _sample_volume(c_map, reg, P)
+        # outside the simulation domain is the same coupling water the model assumes
+        ax.imshow(np.where(np.isfinite(sl), sl, c0), origin="lower", extent=ext, cmap="bone",
+                  vmin=c0, vmax=float(np.nanmax(c_map)), aspect="equal",
+                  interpolation="bilinear")
+        if atlas_img is not None and atlas_ids is not None:
+            m = _atlas_mask_on_plane(atlas_img, atlas_ids, P)
+            if m.any():
+                rgba = np.zeros(m.shape + (4,))
+                rgba[..., 1], rgba[..., 0], rgba[..., 2] = 0.78, 0.17, 0.35
+                rgba[..., 3] = np.where(m, 0.42, 0.0)
+                ax.imshow(rgba, origin="lower", extent=ext, aspect="equal",
+                          interpolation="nearest")
+                ax.contour(np.linspace(ext[0], ext[1], m.shape[1]),
+                           np.linspace(ext[2], ext[3], m.shape[0]), m.astype(float),
+                           levels=[0.5], colors="#2ca02c", linewidths=1.1)
+        ax.plot([win[a_ax], tgt[a_ax]], [win[b_ax], tgt[b_ax]], color="#ff9f1c", ls="--", lw=1.4)
+        ax.scatter([tgt[a_ax]], [tgt[b_ax]], marker="+", s=130, c="cyan", linewidths=1.8, zorder=6)
+        ax.scatter([win[a_ax]], [win[b_ax]], marker="*", s=170, c="red", edgecolors="k",
+                   linewidths=0.5, zorder=6)
+        ax.set_title(name, fontsize=10)
+        ax.set_xlabel(xl, fontsize=8)
+        ax.set_ylabel(yl, fontsize=8)
+        ax.tick_params(labelsize=7)
+    lbl = f", {atlas_label} in green" if (atlas_img is not None and atlas_ids is not None) else ""
+    fig.suptitle(f"Anatomy through the target — sound speed{lbl} "
+                 "(cyan + target, red ★ window, dashed beam axis)", fontsize=11)
+    fig.tight_layout()
+    return fig
+
+
+def _target3d_figure(tmap, placement, c_map, bone_threshold, atlas_img=None, atlas_ids=None,
+                     atlas_label="target structure", decimate=2):
+    """The target inside a semi-transparent skull, in three anatomical views — the
+    manuscript's Figure-1 scene. The skull is an isosurface of the sound-speed volume
+    rendered at low opacity; the target is the atlas structure when one is supplied, else
+    a small sphere at the target point."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+    from scipy.ndimage import binary_closing, gaussian_filter
+    try:                                       # scikit-image is not a dependency of this
+        from skimage.measure import marching_cubes    # package: without it the scene falls
+    except ImportError:                                # back to point clouds, which read the
+        marching_cubes = None                          # same way but with rougher edges
+
+    reg = tmap.registration
+    dx = reg.dx_mm
+    d = max(1, int(decimate))
+    bone_b = np.asarray(c_map)[::d, ::d, ::d] > bone_threshold
+    if not bone_b.any():
+        return None                                  # nothing to draw
+    if marching_cubes is not None:
+        bone = gaussian_filter(bone_b.astype(np.float32), 0.7)
+        if not (bone.max() > 0.5 > bone.min()):
+            return None
+        sv, sf, _, _ = marching_cubes(bone, level=0.5)
+        Vs = sv * d * dx                             # decimated voxel -> grid mm
+    else:
+        sf = None
+        Vs = np.argwhere(bone_b).astype(float) * d * dx
+
+    tgt_g = np.asarray(reg.mni_to_fullres(np.asarray(placement.target_mni_mm, float)), float) * dx
+    win_g = np.asarray(reg.mni_to_fullres(np.asarray(placement.window_center_mni_mm, float)), float) * dx
+    Vt = ft = None
+    if atlas_img is not None and atlas_ids is not None:
+        A = np.asarray(atlas_img.affine, float)
+        step = max(1, int(round(0.2 / abs(A[0, 0]))))      # sample the atlas at ~0.2 mm
+        sub = np.asarray(atlas_img.dataobj[::step, ::step, ::step])
+        mask = binary_closing(np.isin(sub, np.asarray(atlas_ids)), np.ones((2, 2, 2)))
+        if mask.sum() > 8:
+            if marching_cubes is not None:
+                tv, ft, _, _ = marching_cubes(mask.astype(np.float32), level=0.5)
+            else:
+                tv, ft = np.argwhere(mask).astype(float), None
+            world = (A[:3, :3] @ (tv * step).T + A[:3, 3:4]).T
+            Vt = np.asarray(reg.mni_to_fullres(world), float) * dx
+
+    fig = plt.figure(figsize=(13.5, 5.0))
+    for k, (name, el, az) in enumerate(_ANAT_VIEWS):
+        ax = fig.add_subplot(1, 3, k + 1, projection="3d")
+        ax.computed_zorder = False
+        if sf is not None:
+            ax.plot_trisurf(Vs[:, 0], Vs[:, 1], Vs[:, 2], triangles=sf, color="#c8ccd2",
+                            alpha=0.16, linewidth=0, shade=True, zorder=1)
+        else:
+            ax.scatter(*Vs[::7].T, c="#c8ccd2", s=1.4, alpha=0.10, linewidths=0, zorder=1)
+        if Vt is not None and ft is not None:
+            ax.plot_trisurf(Vt[:, 0], Vt[:, 1], Vt[:, 2], triangles=ft, color="#2ca02c",
+                            alpha=0.95, linewidth=0, shade=True, zorder=3)
+        elif Vt is not None:
+            ax.scatter(*Vt[::3].T, c="#2ca02c", s=4.0, alpha=0.85, linewidths=0, zorder=3)
+        else:
+            u, v = np.mgrid[0:2 * np.pi:24j, 0:np.pi:12j]
+            r = 0.05 * float(np.ptp(Vs, axis=0).max())
+            ax.plot_surface(tgt_g[0] + r * np.cos(u) * np.sin(v),
+                            tgt_g[1] + r * np.sin(u) * np.sin(v),
+                            tgt_g[2] + r * np.cos(v), color="#2ca02c", alpha=0.85,
+                            linewidth=0, zorder=3)
+        ax.plot(*np.c_[win_g, tgt_g], color="#ff9f1c", ls="--", lw=1.6, zorder=4)
+        ax.scatter(*win_g, c="red", marker="*", s=170, edgecolors="k", linewidths=0.5,
+                   zorder=5, depthshade=False)
+        ax.view_init(elev=el, azim=az)
+        ax.set_box_aspect((1, 1, 1))
+        lo, hi = Vs.min(0), Vs.max(0)
+        mid, sp = (hi + lo) / 2, (hi - lo).max() / 2
+        for kk, mm in zip("xyz", mid):
+            getattr(ax, f"set_{kk}lim")(mm - sp, mm + sp)
+        for pane in (ax.xaxis, ax.yaxis, ax.zaxis):
+            pane.set_ticklabels([])
+            pane.pane.set_facecolor((1, 1, 1, 0))
+        ax.grid(False)
+        ax.set_title(name, fontsize=10)
+    what = atlas_label if Vt is not None else "target"
+    fig.suptitle(f"The {what} (green) inside the semi-transparent skull "
+                 "(red ★ window, dashed beam axis)", fontsize=11)
+    return fig
+
+
 def _map3d_figure(tmap):
     """The transparency map on the skull surface from four culled viewpoints."""
     import matplotlib
@@ -426,13 +629,22 @@ def html_to_pdf(html_path, pdf_path=None, *, timeout_s: float = 180.0) -> Path:
 
 def write_report(tmap, placement, out_html, *, title="Skull transparency placement",
                  target_name=None, bowl_radius_mm=32.0, theta_max_deg=35.0,
-                 pdf=None) -> Path:
+                 pdf=None, bundle=None, atlas=None, atlas_ids=None,
+                 atlas_label="target structure") -> Path:
     """Write the placement report; returns the path written.
 
     ``bowl_radius_mm`` / ``theta_max_deg`` parameterise the objective, alternates, and
     access fraction (pass the values the placement used). ``pdf=True`` also renders a PDF
     beside the HTML and returns *that* path; ``pdf=None`` (the default) infers it from an
-    ``.pdf`` suffix on ``out_html``, so ``--out report.pdf`` does what it looks like."""
+    ``.pdf`` suffix on ``out_html``, so ``--out report.pdf`` does what it looks like.
+
+    Pass ``bundle`` (the FieldBundle the map came from) to add the anatomy section:
+    sagittal/coronal/axial cuts through the target and a 3-D view of it inside the
+    semi-transparent skull, both drawn from the bundle's own sound-speed volume. Add
+    ``atlas`` (a label-volume path or a loaded NIfTI image) with ``atlas_ids`` (the label
+    values that make up the target structure) to draw the structure itself -- e.g. the
+    Allen cerebellum warped into a mouse skull's frame. Without a bundle the section is
+    skipped; with a bundle but no atlas the target is drawn as a sphere."""
     want_pdf = (str(out_html).lower().endswith(".pdf")) if pdf is None else bool(pdf)
     out_html = Path(out_html).with_suffix(".html")
     from .position_tool import preview_placement
@@ -460,6 +672,26 @@ def write_report(tmap, placement, out_html, *, title="Skull transparency placeme
         u, u.fld_o, (0.0, 1.0), "viridis",
         "Placement objective $\\sqrt{J_w}$ — what the window search maximises "
         "(manuscript Fig. 8)", "objective (normalised)"))
+    png_ortho = png_t3d = None
+    if bundle is not None:
+        c_map = None
+        try:
+            c_map = bundle.skull_c()
+        except Exception:                        # a bundle without its c-map: skip anatomy
+            c_map = None
+        if c_map is not None:
+            atlas_img = atlas
+            if isinstance(atlas, (str, Path)):
+                import nibabel as nib
+                atlas_img = nib.load(str(atlas))
+            thr = float(dict(getattr(bundle, "physics", {}) or {}).get("bone_threshold", 2200.0))
+            phys = dict(getattr(bundle, "physics", {}) or {})
+            png_ortho = _fig_png(_ortho_figure(tmap, placement, c_map, atlas_img, atlas_ids,
+                                               atlas_label, c0=phys.get("c0")))
+            fig_t3d = _target3d_figure(tmap, placement, c_map, thr, atlas_img, atlas_ids,
+                                       atlas_label)
+            if fig_t3d is not None:
+                png_t3d = _fig_png(fig_t3d)
     png_3d = _fig_png(_map3d_figure(tmap))
     png_sc = _fig_png(_scene3d_figure(tmap, placement, bowl_radius_mm))
     tmp = out.with_suffix(".placement.png")
@@ -510,6 +742,22 @@ def write_report(tmap, placement, out_html, *, title="Skull transparency placeme
                   "hair, hardware, or a frame blocks the optimum. Columns follow the "
                   "manuscript Table 1 (window, incidence, distance).</p>"
                   ) if arows else "<p>(no separated alternatives found)</p>"
+    anatomy_html = ""
+    if png_ortho:
+        what = atlas_label if (atlas is not None and atlas_ids is not None) else "target"
+        anatomy_html = (
+            "<h2>2 · The target in the skull</h2>\n"
+            f'<img src="data:image/png;base64,{png_ortho}" alt="anatomy ortho-slices"/>\n'
+            + (f'<img src="data:image/png;base64,{png_t3d}" alt="target in 3-D"/>\n'
+               if png_t3d else "")
+            + '<p class="note">Sagittal, coronal and axial cuts through the target, taken '
+              f'from the same sound-speed volume the solver used, with the {what} overlaid '
+              'where an atlas was supplied. The 3-D scene is the manuscript Figure-1 view: '
+              'the structure inside a semi-transparent skull, with the chosen window and '
+              'the beam axis marked. Slices and coordinates are in the frame named in the '
+              'footer.</p>\n')
+    _n = 2 + (1 if anatomy_html else 0)
+    n_surf, n_inc, n_obj, n_alt, n_meth = _n, _n + 1, _n + 2, _n + 3, _n + 4
     stamp = datetime.date.today().isoformat()
     html = f"""<!doctype html><html><head><meta charset="utf-8"><title>{title}</title>
 <style>
@@ -532,7 +780,8 @@ def write_report(tmap, placement, out_html, *, title="Skull transparency placeme
 <h2>1 · Placement summary</h2>
 <table>{trs}</table>
 
-<h2>2 · Surface coupling and bone transmission</h2>
+{anatomy_html}
+<h2>{n_surf} · Surface coupling and bone transmission</h2>
 <img src="data:image/png;base64,{png_3d}" alt="transparency map 3-D"/>
 <img src="data:image/png;base64,{png_t}" alt="transparency unwrapped"/>
 <p class="note">Transmitted amplitude in dB (1/r&sup2;-corrected) — for <em>seeing</em>
@@ -540,14 +789,14 @@ where the bone transmits, in the manuscript Fig.&nbsp;5 presentation. Bright = t
 bone; grey = no direct-arrival coverage. This corrected map is a visualisation — placement
 uses the raw quantity below.</p>
 
-<h2>3 · Beam incidence and the legality limit</h2>
+<h2>{n_inc} · Beam incidence and the legality limit</h2>
 <img src="data:image/png;base64,{png_i}" alt="incidence unwrapped"/>
 <p class="note">Angle between the target→patch ray and the bone's outward normal. Beyond
 the legality limit the fluid model's longitudinal transmission gives way to unmodelled
 shear conversion, so those windows are excluded from placement (manuscript, Discussion:
 the water–bone longitudinal critical angle).</p>
 
-<h2>4 · The placement objective and the chosen window</h2>
+<h2>{n_obj} · The placement objective and the chosen window</h2>
 <img src="data:image/png;base64,{png_o}" alt="objective unwrapped"/>
 <img src="data:image/png;base64,{png_sc}" alt="placement scene 3-D"/>
 <img src="data:image/png;base64,{png_pl}" alt="placement"/>
@@ -558,10 +807,10 @@ integrated over the bowl footprint, illegal patches excluded (manuscript Eqs.&nb
 &amp;&nbsp;14; the field of Fig.&nbsp;8). The red star is the chosen window; the bright
 lobe's breadth is the placement margin quoted in the summary.</p>
 
-<h2>5 · Alternative windows (if the optimum is blocked)</h2>
+<h2>{n_alt} · Alternative windows (if the optimum is blocked)</h2>
 {alts_table}
 
-<h2>6 · Methods</h2>
+<h2>{n_meth} · Methods</h2>
 <details><summary><b>How each number is computed</b></summary>
 <ul style="font-size:0.9em">
 <li><b>Transparency (dB)</b>: 20·log10 of the 1/r&sup2;-corrected transmitted amplitude

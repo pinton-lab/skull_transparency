@@ -171,7 +171,8 @@ def extract():
 
 def place():
     """Seat the TIPS on the map and write the report, with the cone-derived footprint."""
-    tmap = st.compute_transparency_map(st.load_bundle(OUT))
+    bundle = st.load_bundle(OUT)
+    tmap = st.compute_transparency_map(bundle)
     foot_mm, r_mm = footprint_radius_mm(TIPS, tmap)
     print(f"  skull at r~{r_mm:.1f} mm from the target; TIPS half-angle "
           f"{TIPS.half_angle_deg:.1f} deg -> footprint radius {foot_mm:.1f} mm "
@@ -185,7 +186,9 @@ def place():
     rep = write_report(tmap, pl, HERE / "report_mouse_tips_cerebellum.pdf",
                        target_name="cerebellum (middle)", bowl_radius_mm=foot_mm,
                        theta_max_deg=TIPS.acceptance_angle_deg,
-                       title="Mouse — TIPS 1 MHz on the middle of the cerebellum")
+                       title="Mouse — TIPS 1 MHz on the middle of the cerebellum",
+                       bundle=bundle, atlas=ANNOT_NII, atlas_ids=CEREBELLUM_IDS,
+                       atlas_label="cerebellum")
     print(f"REPORT -> {rep}")
     return pl
 
