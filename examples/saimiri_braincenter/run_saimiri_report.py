@@ -147,7 +147,8 @@ def main():
 
     rep = write_report(
         tmap, pl, OUT, target_name="brain center",
-        bowl_radius_mm=foot, theta_max_deg=THETA_MAX_DEG,
+        bowl_radius_mm=foot, aperture_mm=APERTURE_MM,   # the DISH; foot is its footprint
+        theta_max_deg=THETA_MAX_DEG,
         title="Squirrel monkey (Saimiri) — brain-center whole-skull transparency at 1 MHz",
         bundle=bundle, atlas=str(BRAINMASK_NII), atlas_ids=(1,),
         atlas_label="brain (VALiDATe29)", parameters=params, frame_is_mni=False,

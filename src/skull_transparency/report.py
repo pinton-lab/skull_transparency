@@ -259,10 +259,25 @@ def _unwrap_panel(u, field, vlim, cmap, title, clabel, contour_at=None):
     return fig
 
 
-def _scene3d_figure(tmap, placement, bowl_radius_mm):
+def _scene3d_figure(tmap, placement, bowl_radius_mm, aperture_mm=None, frame="head"):
     """The placement as a 3-D scene, manuscript Figs. 1 and 8 style: semi-transparent
     skull, the transducer bowl surface seated at its pose, the beam axis, and the target
-    marked inside the head. Two views: down the beam axis, and side-on to it."""
+    marked inside the head. Two views: down the beam axis, and side-on to it.
+
+    ``frame`` sets the extent. ``"head"`` frames the skull, which is what you want to read
+    the window against the anatomy -- but it crops the dish away whenever the device is
+    large next to the head, and a bowl focused far beyond the skull is exactly that (the
+    mouse TIPS is a 92 mm dish on a 25 mm head, entirely outside a head-framed view).
+    ``"device"`` frames the skull AND the whole transducer, so the geometry is legible at
+    the scale the hardware actually has. The report draws both.
+
+    ``aperture_mm`` is the DEVICE's aperture diameter, and is what sizes the drawn dish.
+    Without it the cap falls back to ``bowl_radius_mm``, which is the beam's FOOTPRINT on
+    the skull -- the same radius the placement objective sweeps. Those two coincide only
+    when the skull sits about one focal length from the target, which is true of a human
+    and badly false of a rodent: the mouse TIPS (80 mm focal length, 92 mm aperture, skull
+    6 mm from the target) has a 3.4 mm footprint, so the fallback would draw a 2.4 deg cap
+    where the real dish subtends 35.1 deg. Pass the aperture whenever it is known."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -281,7 +296,8 @@ def _scene3d_figure(tmap, placement, bowl_radius_mm):
     n = apex - tgt
     roc = float(np.linalg.norm(n)) or 1.0
     n = n / roc
-    half = float(np.arcsin(np.clip(bowl_radius_mm / roc, 0.0, 1.0)))
+    r_cap = (float(aperture_mm) / 2.0 if aperture_mm else float(bowl_radius_mm))
+    half = float(np.arcsin(np.clip(r_cap / roc, 0.0, 1.0)))
     e1 = np.cross(n, [0.0, 0.0, 1.0])
     if np.linalg.norm(e1) < 0.2:
         e1 = np.cross(n, [0.0, 1.0, 0.0])
@@ -311,7 +327,9 @@ def _scene3d_figure(tmap, placement, bowl_radius_mm):
     for kview, (vname, el, az) in enumerate(views):
         ax = fig.add_subplot(1, 2, kview + 1, projection="3d")
         ax.computed_zorder = False
-        ax.scatter(*P.T, c="#9aa2ad", s=1.5, alpha=0.05, linewidths=0, zorder=1)
+        wide = frame == "device"
+        ax.scatter(*P.T, c="#9aa2ad", s=(4.0 if wide else 1.5),
+                   alpha=(0.18 if wide else 0.05), linewidths=0, zorder=1)
         ax.plot_surface(sx, sy, sz, color="#2ca02c", alpha=0.45, linewidth=0, zorder=2)
         ext = tgt - 0.25 * roc * n
         ax.plot(*np.c_[apex, ext], color="#2ca02c", ls="--", lw=1.5, zorder=3)
@@ -321,7 +339,10 @@ def _scene3d_figure(tmap, placement, bowl_radius_mm):
                    zorder=5, label="window")
         ax.view_init(elev=el, azim=az)
         ax.set_box_aspect((1, 1, 1))
-        lo, hi = P.min(0), P.max(0)
+        # head frame: the skull alone. device frame: skull + dish + apex, so nothing is
+        # cropped even when the transducer dwarfs the head.
+        Q = np.vstack([P, cap, apex[None, :]]) if frame == "device" else P
+        lo, hi = Q.min(0), Q.max(0)
         mid, sp = (hi + lo) / 2, (hi - lo).max() / 2 * 1.12   # margin so the bowl fits
         for kk, mm in zip("xyz", mid):
             getattr(ax, f"set_{kk}lim")(mm - sp, mm + sp)
@@ -332,9 +353,15 @@ def _scene3d_figure(tmap, placement, bowl_radius_mm):
         ax.set_title(vname, fontsize=10)
         if kview == 0:
             ax.legend(fontsize=8, loc="upper left")
-    fig.suptitle("Placement scene — transducer on the skull, target in the head "
-                 "(semi-transparent; green sphere = target marker, not a focal volume)",
-                 fontsize=11)
+    if frame == "device":
+        span = float((np.vstack([P, cap]).max(0) - np.vstack([P, cap]).min(0)).max())
+        fig.suptitle(f"Placement scene at DEVICE scale — the whole {2 * r_cap:.0f} mm dish "
+                     f"and its stand-off ({span:.0f} mm across; the head is the small cloud "
+                     "at the focus)", fontsize=11)
+    else:
+        fig.suptitle("Placement scene — transducer on the skull, target in the head "
+                     "(semi-transparent; green sphere = target marker, not a focal volume)",
+                     fontsize=11)
     return fig
 
 
@@ -627,13 +654,19 @@ def html_to_pdf(html_path, pdf_path=None, *, timeout_s: float = 180.0) -> Path:
         f"{html} is complete and prints to PDF from any browser.")
 
 
-def _movie_frames(movie, out_dir, *, max_frames: int = 60, width: int = 900):
+def _movie_frames(movie, out_dir, *, max_frames: int = 60, width: int = 1200):
     """Extract evenly spaced PNG frames from a movie (mp4/gif) or a directory of frames.
 
     Returns ``(n_frames, fps)``; files are written as ``frame-0.png`` ... in ``out_dir``,
-    the zero-based, unpadded naming ``\animategraphics`` expects. Frames are subsampled and
-    downscaled because the animation is embedded in the PDF whole -- 105 full-size frames
-    would add tens of megabytes for no visible gain."""
+    the zero-based, unpadded naming ``\animategraphics`` expects. Frames are subsampled in
+    TIME because the animation is embedded in the PDF whole and 105 full-size frames would
+    add tens of megabytes for no visible gain.
+
+    Spatial downscaling is area-averaged and only happens when the source is actually wider
+    than ``width``. It used to be ``im[::step, ::step]`` with ``step = ceil(w / width)``,
+    which is both aliased and systematically too small: any source between 1x and 2x the
+    target was HALVED, so the common 1200 px propagation movie landed at 600 px against a
+    900 px target and read as visibly soft on a full PDF page."""
     import imageio.v3 as iio
     src = Path(movie)
     fps = 12.0
@@ -657,20 +690,30 @@ def _movie_frames(movie, out_dir, *, max_frames: int = 60, width: int = 900):
         im = np.asarray(imgs[i])
         if im.ndim == 3 and im.shape[2] == 4:
             im = im[..., :3]
-        if im.shape[1] > width:                          # cheap integer decimation
-            step = int(np.ceil(im.shape[1] / width))
-            im = im[::step, ::step]
+        if im.shape[1] > width:                          # area-averaged, exact target width
+            h = int(round(im.shape[0] * width / im.shape[1]))
+            try:
+                from PIL import Image
+                im = np.asarray(Image.fromarray(im).resize((width, h), Image.LANCZOS))
+            except Exception:                            # no pillow: fall back to decimation
+                step = int(np.ceil(im.shape[1] / width))
+                im = im[::step, ::step]
         iio.imwrite(out_dir / f"frame-{j}.png", im)
     return len(keep), fps
 
 
-def append_animated_page(pdf_path, movie, *, fps=None, caption="", timeout_s: float = 300.0):
+def append_animated_page(pdf_path, movie, *, fps=None, caption="", autoplay: bool = True,
+                         timeout_s: float = 300.0):
     """Append a page carrying a real ``\animategraphics`` animation to a report PDF.
 
     A browser-printed PDF can only ever show one still of a movie. LaTeX's ``animate``
     package embeds the frames and plays them in Acrobat and compatible viewers -- the same
     mechanism the manuscript's propagation figure uses -- so the movie is built as a
-    one-page PDF here and concatenated onto the report. Returns the PDF path; when pdflatex,
+    one-page PDF here and concatenated onto the report. ``autoplay`` (the default) starts it
+    as soon as the page is shown and loops; set it False for a click-to-play control bar.
+
+    Either way this needs a viewer that runs the embedded JavaScript -- Acrobat and
+    PDF-XChange do, okular and most browser viewers do not and show a single still. Returns the PDF path; when pdflatex,
     the animate package, or pypdf is missing the report is returned unchanged and a warning
     says why (the HTML still animates)."""
     import shutil
@@ -700,6 +743,10 @@ def append_animated_page(pdf_path, movie, *, fps=None, caption="", timeout_s: fl
         # A caption is prose from the caller, so every LaTeX special has to be escaped --
         # a bare underscore in something like "make_propagation_movie.py" is enough to
         # abort the whole page.
+        # autoplay+loop rather than a control bar: the page starts playing on its own when
+        # it becomes visible, which is what a report reader wants. `controls` adds a button
+        # strip (and ~16 extra annotations) that has to be clicked first.
+        opts = "autoplay,loop" if autoplay else "controls,loop"
         cap = str(caption or "")
         for a, b in (("\\", " "), ("&", r"\&"), ("%", r"\%"), ("$", r"\$"), ("#", r"\#"),
                      ("_", r"\_"), ("{", r"\{"), ("}", r"\}"), ("~", r"\textasciitilde{}"),
@@ -711,7 +758,7 @@ def append_animated_page(pdf_path, movie, *, fps=None, caption="", timeout_s: fl
             "\\pagestyle{empty}\\setlength{\\parindent}{0pt}\n"
             "\\begin{document}\n"
             "{\\large\\bfseries Wave propagation}\\\\[4pt]\n"
-            f"\\animategraphics[controls,loop,width=\\linewidth]{{{rate:g}}}{{frame-}}{{0}}{{{n - 1}}}\n"
+            f"\\animategraphics[{opts},width=\\linewidth]{{{rate:g}}}{{frame-}}{{0}}{{{n - 1}}}\n"
             f"\\\\[6pt]\\small {cap}\n"
             "\\end{document}\n")
         for _ in range(2):
@@ -723,11 +770,24 @@ def append_animated_page(pdf_path, movie, *, fps=None, caption="", timeout_s: fl
             warnings.warn(f"pdflatex could not build the animation page; the PDF is "
                           f"otherwise complete. Last output:\n{tail}")
             return pdf_path
-        w = PdfWriter()
-        for page in PdfReader(str(pdf_path)).pages:
-            w.add_page(page)
-        for page in PdfReader(str(anim)).pages:
-            w.add_page(page)
+        # Merge with append(), NOT page-by-page add_page(). The animation is a set of
+        # AcroForm pushbutton fields (one per frame) driven by a /Screen annotation's
+        # page-open action; add_page() copies the annotations but leaves the document
+        # catalog's /AcroForm behind, orphaning every field. The page then looks right and
+        # does nothing -- which is exactly the "it won't play" symptom, in EVERY viewer,
+        # rather than the viewer limitation it resembles. Measured on a 6-frame probe:
+        # standalone pdflatex 7 fields, add_page 0, append 7.
+        try:
+            w = PdfWriter(clone_from=str(pdf_path))
+            w.append(str(anim))
+        except Exception:                       # older pypdf/PyPDF2 without clone/append
+            w = PdfWriter()
+            for page in PdfReader(str(pdf_path)).pages:
+                w.add_page(page)
+            for page in PdfReader(str(anim)).pages:
+                w.add_page(page)
+            warnings.warn("this pypdf cannot merge AcroForms; the animation page will not "
+                          "play (upgrade pypdf, or open the animation PDF on its own)")
         with open(pdf_path, "wb") as fh:
             w.write(fh)
     return pdf_path
@@ -922,7 +982,7 @@ def _forward_figure(peaks, placement, reg, comparison=None, c_map=None, c0=None,
 _SOURCE_CLASSES = ("Measured", "Literature", "Derived", "Convention", "Assumption")
 
 
-def _provenance_rows(tmap, placement, bundle=None, *, bowl_radius_mm=None,
+def _provenance_rows(tmap, placement, bundle=None, *, bowl_radius_mm=None, aperture_mm=None,
                      theta_max_deg=None, extra=None):
     """Rows of ``(parameter, value, source, note)`` for the parameter table.
 
@@ -970,6 +1030,11 @@ def _provenance_rows(tmap, placement, bundle=None, *, bowl_radius_mm=None,
             ("Cone half-angle", f"{float(geom.get('half_angle_deg', float('nan'))):.1f} deg",
              "Derived", "arcsin((aperture/2)/ROC); what the beam actually subtends."),
         ]
+    if aperture_mm is not None:
+        rows.append(("Transducer aperture", f"{float(aperture_mm):.0f} mm", "Device",
+                     "Aperture DIAMETER of the dish; sizes the bowl drawn in the 3-D scene. "
+                     "Distinct from the window footprint below, which is where the beam "
+                     "cone actually crosses the skull."))
     if bowl_radius_mm is not None:
         rows.append(("Window footprint radius", f"{float(bowl_radius_mm):.1f} mm", "Derived",
                      "Radius on the skull the window score is aggregated over. Equals the "
@@ -1001,13 +1066,17 @@ def _provenance_html(rows):
 
 def write_report(tmap, placement, out_html, *, title="Skull transparency placement",
                  target_name=None, bowl_radius_mm=32.0, theta_max_deg=35.0,
+                 aperture_mm=None,
                  pdf=None, bundle=None, atlas=None, atlas_ids=None,
                  atlas_label="target structure", movie=None, movie_caption=None,
                  forward=None, parameters=None, frame_is_mni=None) -> Path:
     """Write the placement report; returns the path written.
 
     ``bowl_radius_mm`` / ``theta_max_deg`` parameterise the objective, alternates, and
-    access fraction (pass the values the placement used). ``pdf=True`` also renders a PDF
+    access fraction (pass the values the placement used). ``bowl_radius_mm`` is the beam's
+    FOOTPRINT on the skull, not the device aperture -- pass ``aperture_mm`` as well so the
+    3-D scene draws the real dish rather than the footprint (see :func:`_scene3d_figure`);
+    they differ by more than an order of magnitude on a rodent. ``pdf=True`` also renders a PDF
     beside the HTML and returns *that* path; ``pdf=None`` (the default) infers it from an
     ``.pdf`` suffix on ``out_html``, so ``--out report.pdf`` does what it looks like.
 
@@ -1116,7 +1185,9 @@ def write_report(tmap, placement, out_html, *, title="Skull transparency placeme
             if fig_fwd is not None:
                 png_fwd = _fig_png(fig_fwd)
     png_3d = _fig_png(_map3d_figure(tmap))
-    png_sc = _fig_png(_scene3d_figure(tmap, placement, bowl_radius_mm))
+    png_sc = _fig_png(_scene3d_figure(tmap, placement, bowl_radius_mm, aperture_mm))
+    png_scw = _fig_png(_scene3d_figure(tmap, placement, bowl_radius_mm, aperture_mm,
+                                       frame="device"))
     tmp = out.with_suffix(".placement.png")
     preview_placement(tmap, placement, out_png=str(tmp), title=title)
     png_pl = base64.b64encode(tmp.read_bytes()).decode()
@@ -1232,7 +1303,7 @@ def write_report(tmap, placement, out_html, *, title="Skull transparency placeme
     n_surf, n_inc, n_obj, n_alt, n_par = _n, _n + 1, _n + 2, _n + 3, _n + 4
     n_meth = _n + 5
     prov_html = _provenance_html(_provenance_rows(
-        tmap, placement, bundle, bowl_radius_mm=bowl_radius_mm,
+        tmap, placement, bundle, bowl_radius_mm=bowl_radius_mm, aperture_mm=aperture_mm,
         theta_max_deg=theta_max_deg, extra=parameters))
     fwd_scope = ("" if fwd_json else
                  " (a transcranial-vs-free-field pair is one; see the forward module)")
@@ -1288,10 +1359,14 @@ the water–bone longitudinal critical angle).</p>
 <h2>{n_obj} · The placement objective and the chosen window</h2>
 <img src="data:image/png;base64,{png_o}" alt="objective unwrapped"/>
 <img src="data:image/png;base64,{png_sc}" alt="placement scene 3-D"/>
+<img src="data:image/png;base64,{png_scw}" alt="placement scene 3-D, device scale"/>
 <img src="data:image/png;base64,{png_pl}" alt="placement"/>
 <p class="note">The scene shows the transducer surface seated at its pose on the
 semi-transparent skull with the target marked inside the head (manuscript Figs.&nbsp;1
-and&nbsp;8 style). &radic;J<sub>w</sub> — incidence-weighted <em>raw</em> delivered intensity
+and&nbsp;8 style). The first pair is framed on the <em>head</em>, which reads the window
+against the anatomy but crops the dish whenever the device is large next to the head; the
+second pair is framed on the <em>device</em>, so the whole bowl and its stand-off are
+visible at the scale the hardware actually has. &radic;J<sub>w</sub> — incidence-weighted <em>raw</em> delivered intensity
 integrated over the bowl footprint, illegal patches excluded (manuscript Eqs.&nbsp;7
 &amp;&nbsp;14; the field of Fig.&nbsp;8). The red star is the chosen window; the bright
 lobe's breadth is the placement margin quoted in the summary.</p>

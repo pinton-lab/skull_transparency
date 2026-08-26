@@ -25,7 +25,7 @@ Museum microCT of *Saimiri sp.* (squirrel monkey), NMNH **USNM 194346**, MorphoS
 |---|---|---|---|
 | skull length (A–P) | 55–65 mm | 95–120 mm | **57 mm** |
 | skull width (L–R) | 33–42 mm | 60–75 mm | **38 mm** |
-| cranial capacity | 20–26 mL | 80–110 mL | **25.4 mL** |
+| cranial capacity | 20–26 mL | 80–110 mL | **26.2 mL** |
 
 A macaque would be 3–4× larger in every dimension. The VALiDATe29 atlas that registered
 successfully to this cavity is also a squirrel-monkey atlas.
@@ -38,7 +38,7 @@ in this case depends on which, so it is carried as *Saimiri sp.*
 | input | source | value / note |
 |---|---|---|
 | sound speed `c` | `saimiri_skull_aligned_98um.nii.gz` | the ~98 µm aligned-native RAS intensity volume through the tuba `SLAB_RAMP` endpoints — `BONE_LOW` 6000 counts → water 1540 m/s, `BONE_RAMP_HIGH` 35000 counts → cortical bone 2900 m/s (both knees calibrated from this scan's own histogram) |
-| brain center | `saimiri_cranial_cavity.nii.gz` | centroid of the curated endocranial-cavity mask (25.4 mL), saimiri aligned-native RAS **(0.23, −8.06, 7.91) mm** |
+| brain center | `saimiri_cranial_cavity.nii.gz` | centroid of the curated endocranial-cavity mask (26.2 mL), saimiri aligned-native RAS **(0.21, −7.70, 7.55) mm** |
 | bone cutoff | (this study) | **1700 m/s** — on this ramp the histogram bone knee sits exactly at water, so bone reads slow; 1700 m/s ≡ 9400 counts, inside the partial-volume shoulder between the mount/soft-tissue mode (≤ ~5000 counts) and the cortical plateau (≥ ~10000) |
 
 The cavity mask is used rather than the image-only hole-fill because this is a **dry**
@@ -53,8 +53,8 @@ specimen, open at the foramina, where the hole-fill leaks (the human Halle / mou
 
 ## Grid
 
-1 MHz, 6 PPW → `dx` = 0.257 mm, grid **196 × 268 × 234** (12.3 M voxels), 17,317 recorder
-patches, 81,298 dense surface patches. The calvarium measures **~1.1 mm** median bone path
+1 MHz, 6 PPW → `dx` = 0.257 mm, grid **196 × 272 × 234** (12.5 M voxels), 17,575 recorder
+patches, 83,084 dense surface patches. The calvarium measures **~1.1 mm** median bone path
 from the brain center (independently consistent with the 1.0–1.5 mm literature value), i.e.
 4–6 grid voxels through bone. Solve + extract take under a minute on one A6000.
 
@@ -140,14 +140,20 @@ rather than drawn by hand. On this bundle (ROC 35 mm, aperture 30 mm, 35° accep
 
 | criterion | what it rules out | patches dropped |
 |---|---|---|
-| `max_layers=1` | beam crosses the mandible, zygomatic arch or tympanic bulla before the window | 38,306 |
-| `min_bone_mm=0.3` | thin foramen lips credited with energy that came out of a hole | 10 |
-| `open_pad_deg=10` | the rim of an open aperture | 2,458 |
-| `neck_cone_deg=45` | cones about every significant opening — the neck and pharynx lie beyond them | 8,238 |
-| cap clearance | the dish itself would collide with bone | 883 |
+| `max_layers=1` | beam crosses the mandible, zygomatic arch or tympanic bulla before the window | 38,452 |
+| `min_bone_mm=0.3` | thin foramen lips credited with energy that came out of a hole | 5 |
+| `open_pad_deg=10` | the rim of an open aperture | 1,193 |
+| `neck_cone_deg=45` | cones about every significant opening — the neck and pharynx lie beyond them | 2,980 |
+| cap clearance | the dish itself would collide with bone | 809 |
 
-**38.6 %** of patches survive, and the chosen window moves to the **vault**:
-`(0.09, −8.77, 23.08)` mm, 15.2 mm from the target, incidence **15.9°** (was 33.7°).
+**47.7 %** of patches survive, and the chosen window moves to the **vault**:
+`(−1.19, −8.71, 23.08)` mm, incidence **15.8°** (was 17.4° unmasked).
+
+> Rebuilt 2026-08-26 on the un-truncated skull (tuba `abf948a`); the previous numbers were
+> 38.6 % surviving and a 15.9° window at `(0.09, −8.77, 23.08)`. Most of the change is the
+> occiput itself: with the pole restored, 1,265 fewer patches drop as open-aperture rim and
+> 5,258 fewer as neck cone, because the missing bone had been read as a large opening. The
+> largest opening shrinks from 1.4 % of 4π (half-angle 16.7°) to 1.2 % (13.1°).
 
 ### Finding the openings
 

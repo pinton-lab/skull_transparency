@@ -55,12 +55,21 @@ human results do not move.
 |---|---|
 | window | maga RAS (−1.6, −12.9, 2.0) mm — interparietal/occipital bone, directly over the cerebellum |
 | window-to-target | 2.1 mm (the mouse brain nearly touches the skull) |
-| incidence | 24.6° (inside the 35° acceptance angle) |
-| access | 54 % of 4π of incidence-legal, well-transmitting skull |
+| incidence | 34.3° (just inside the 35° acceptance angle) |
+| access | 52 % of 4π of incidence-legal, well-transmitting skull |
 | placement tolerance | the ≥90 %-objective lobe extends 4 mm |
-| transparency spread | 18.3 dB between the 5th and 95th percentile patch |
+| transparency spread | 19.7 dB between the 5th and 95th percentile patch |
 
-The 18 dB spread is the point worth keeping: the mouse skull is *not* uniformly transparent
+> The incidence and access figures moved (from 24.6° and 54 %) on 2026-08-26. `place()` was
+> building the transparency map with the packaged **2200 m/s** calvarial cutoff while the
+> bundle, the solve and the extract all used this medium's own **1800 m/s**. The surface
+> patches are unaffected — they come from the bundle — but `true_normals` re-derives the
+> normals at that threshold, and on bone this thin and partial-volume-smeared the 2200 m/s
+> normals tilt by ~10°. 34.3° is the number consistent with the rest of the pipeline. This
+> is the same bug `skull-transparency place --bone-threshold` exists to prevent; the example
+> now reads the cutoff off the bundle.
+
+The ~20 dB spread is the point worth keeping: the mouse skull is *not* uniformly transparent
 at 1 MHz even though the bone is far thinner than a wavelength (λ_bone = 2.9 mm, bone
 ≈ 0.3 mm) — sutures, the interparietal plate, and the basicranium still differ by more than
 an order of magnitude in delivered intensity.
@@ -104,7 +113,7 @@ The bowl is the **real TIPS**: 80 mm radius of curvature, 92 mm aperture, f/0.87
 that energy — it *moves* it: the hottest point in the box is 1.7× brighter than the
 free-field focus and sits 2.2 mm away, a coherent interference maximum rather than a
 focus. At 1 MHz the mouse calvaria is a tenth of a wavelength thick, so it is a poor
-absorber and a strong aberrator, which is the same story the 18 dB spread in the
+absorber and a strong aberrator, which is the same story the ~20 dB spread in the
 transparency map tells. Quoting the box maximum alone would report a spurious *gain*; the
 at-target number is the one that doses the cerebellum.
 
@@ -195,6 +204,10 @@ inputs it needs — the 200 µm sound-speed volume and the Allen annotation warp
 skull frame — are ~7 MB together, staged in `runs/mouse_inputs_v1/` with checksums, and
 fetched from whatever location `MOUSE_DATA_URL` points at.
 
-Verified end to end: the notebook reproduces the numbers on this page exactly (window,
+Verified end to end: the notebook reproduced the numbers on this page exactly (window,
 incidence, and the −4.4 dB at-target insertion loss) in about four minutes. It omits only
 the propagation-movie section, which needs a volume-recorder re-run and a TeX installation.
+
+> Stale as of 2026-08-26: that check predates both the calvarial-cutoff fix above and the
+> switch to the real TIPS, and the notebook has not been re-run since. Expect its incidence
+> to still read 24.6° until it reads the cutoff off the bundle the way `place()` now does.

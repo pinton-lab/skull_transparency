@@ -15,8 +15,8 @@ taxonomy field says *S. boliviensis* while its own description and the DigiMorph
     water, i_high = BONE_RAMP_HIGH 35000 counts -> cortical bone 2900 m/s). Those intensity
     knees are calibrated from this scan's own histogram.
   * brain center -- the centroid of the curated endocranial-cavity mask
-    (``saimiri_cranial_cavity.nii.gz``, 25.4 mL), saimiri aligned-native RAS
-    (0.23, -8.07, 7.91) mm. The specimen is a DRY museum skull (open at the foramina), so
+    (``saimiri_cranial_cavity.nii.gz``, 26.2 mL), saimiri aligned-native RAS
+    (0.21, -7.70, 7.55) mm. The specimen is a DRY museum skull (open at the foramina), so
     the curated mask is used rather than the image-only hole-fill, which would leak (the
     human Halle / mouse lesson).
   * bone cutoff 1700 m/s -- the calvarial-surface threshold for this ramp. NOT the human
@@ -66,10 +66,19 @@ BONE_THRESHOLD = 1700.0                # m/s; calvarial-surface cutoff for this 
 INPUT_FRAME = "saimiri_aligned_native_ras_mm"
 
 #: Saimiri brain center in that skull's aligned-native RAS frame (mm): the centroid of the
-#: curated endocranial-cavity mask (``saimiri_cranial_cavity``, 25.4 mL -- inside tuba's
+#: curated endocranial-cavity mask (``saimiri_cranial_cavity``, 26.2 mL -- inside tuba's
 #: 20-30 mL QC bracket for a ~22 mL Saimiri brain plus CSF). Recomputed from the mask at run
 #: time and asserted to match. Near the midline (x ~ 0) as the aligned frame requires.
-SAIMIRI_BRAIN_CENTER_RAS_MM = (0.23, -8.07, 7.91)
+#:
+#: CHANGED 2026-08-26, from (0.23, -8.07, 7.91) at 25.35 mL. tuba abf948a found the museum
+#: scan's field of view ends flush against the specimen along the stack axis (~0.3 mm of
+#: margin), leaving the cavity extractor's morphology no headroom, and pads it by
+#: AP_PAD_SLICES=30 (~3.6 mm) at each end. That restores BOTH AP poles -- the cavity grew
+#: 1.9 mm posteriorly and 1.7 mm anteriorly -- so the centroid moved 0.51 mm, which is
+#: lambda/3 at 1 MHz and therefore not ignorable for a time-reversal source planted on it.
+#: The pillar had to be regenerated for this: the fix is in tuba's source, but the
+#: registration products it feeds are gitignored build artifacts and were three days stale.
+SAIMIRI_BRAIN_CENTER_RAS_MM = (0.21, -7.70, 7.55)
 
 PPW = 6.0
 F0_HZ = float(os.environ.get("F0_HZ", 1e6))          # 1 MHz whole-skull survey

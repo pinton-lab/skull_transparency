@@ -174,7 +174,13 @@ def extract():
 def place():
     """Seat the TIPS on the map and write the report, with the cone-derived footprint."""
     bundle = st.load_bundle(OUT)
-    tmap = st.compute_transparency_map(bundle)
+    # Honour the medium's OWN calvarial cutoff, as `skull-transparency place` does. The
+    # patches come from the bundle either way, but `true_normals` re-derives the surface
+    # normals at this threshold: left at the human 2200 m/s default, this thin, partial-
+    # volume-smeared mouse bone yields normals tilted by ~10 deg, and the reported beam
+    # incidence comes out 24.6 deg instead of the correct 34.3 deg.
+    thr = float(bundle.physics.get("bone_threshold", BONE_THRESHOLD))
+    tmap = st.compute_transparency_map(bundle, options=st.TransparencyOptions(bone_threshold=thr))
     foot_mm, r_mm = footprint_radius_mm(TIPS, tmap)
     print(f"  skull at r~{r_mm:.1f} mm from the target; TIPS half-angle "
           f"{TIPS.half_angle_deg:.1f} deg -> footprint radius {foot_mm:.1f} mm "
@@ -187,6 +193,7 @@ def place():
     from skull_transparency.report import write_report
     rep = write_report(tmap, pl, HERE / "report_mouse_tips_cerebellum.pdf",
                        target_name="cerebellum (middle)", bowl_radius_mm=foot_mm,
+                       aperture_mm=TIPS.aperture_mm,   # the DISH; foot_mm is its footprint
                        theta_max_deg=TIPS.acceptance_angle_deg,
                        title="Mouse — TIPS 1 MHz on the middle of the cerebellum",
                        bundle=bundle, atlas=ANNOT_NII, atlas_ids=CEREBELLUM_IDS,
