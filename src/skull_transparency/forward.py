@@ -23,6 +23,13 @@ The capability is a PAIR of solves that are identical in every respect except th
   * (b) FREE FIELD replaces that medium with uniform water at ``c0``
     (:func:`water_medium_like`) -- the same coupling water, now all the way to the target.
 
+The free-field half is a focused bowl radiating into uniform water with nothing in the way,
+so it can also be integrated exactly instead of solved: ``free_field='rs'`` skips the second
+deck and evaluates :func:`free_field_rs` on the same focal box. Full wave stays the DEFAULT,
+because a pair run on one grid cancels its own discretisation error in the ratio while an
+exact analytic denominator under a discretised numerator does not -- see
+:func:`free_field_rs` for the measured comparison and when each is the right choice.
+
 Because only the medium differs, the ratio ``peak|p|_transcranial / peak|p|_freefield`` is
 the INSERTION LOSS of the skull for THAT placement (linear ratio, and dB via
 ``20*log10(ratio)``). It folds together transmission through the bone, absorption inside
@@ -53,6 +60,7 @@ or, equivalently, ``skull-transparency forward --sim run/ --placement result/pla
 
 Both solves are GPU work (the CUDA solver invoked exactly as the time-reversal launchers
 invoke it); :func:`write_forward_pair` writes the two decks without running anything.
+With ``free_field='rs'`` only the transcranial deck is written and solved.
 """
 from __future__ import annotations
 
@@ -360,7 +368,7 @@ def _geometric_drive(src_vox, target_vox, dX_m: float, c0: float, omega0: float,
 def write_forward_deck(out_dir, meta: dict, source: BowlSource, c, rho, alpha, *,
                        box_half_mm: float = 12.0, modT: int = 2, p0: float = 1.0,
                        attenuation: bool = False, beta: float = 5.5,
-                       write_maps: bool = True) -> dict:
+                       write_maps: bool = True, extra_info: dict | None = None) -> dict:
     """Write ONE forward solver deck into ``out_dir`` and return its parameters.
 
     The deck is written with the same primitives as the time-reversal launchers
@@ -448,6 +456,8 @@ def write_forward_deck(out_dir, meta: dict, source: BowlSource, c, rho, alpha, *
         "source_max_distance_mm": float(dmax_m * 1e3),
         "source": source.to_dict(),
     }
+    if extra_info:                     # provenance the analytic twin needs (water alpha)
+        info.update(extra_info)
     (out_dir / "forward_deck.json").write_text(json.dumps(info, indent=1))
     return info
 
@@ -658,6 +668,9 @@ class ForwardComparison:
     target_vox: tuple = ()
     run_dirs: dict = field(default_factory=dict)
     source: dict | None = None
+    #: how the free-field twin was obtained -- 'fullwave' (a second solve), 'rs' (the
+    #: analytic Rayleigh-Sommerfeld reference) or 'none'. Report it with the ratio.
+    free_field_method: str | None = None
 
     @classmethod
     def from_metrics(cls, transcranial: FocalMetrics, free_field: FocalMetrics | None = None,
@@ -719,13 +732,15 @@ class ForwardComparison:
             "target_vox": [float(v) for v in self.target_vox],
             "run_dirs": {k: str(v) for k, v in self.run_dirs.items()},
             "source": self.source,
+            "free_field_method": self.free_field_method,
         }
 
     def summary(self) -> str:
         """One-paragraph human summary (the CLI prints this)."""
         lines = [f"peak pressure    transcranial {self.p_transcranial_pa:.4g} Pa"]
         if self.transmission is not None:
-            lines[0] += f"   free field {self.p_freefield_pa:.4g} Pa"
+            lines[0] += (f"   free field {self.p_freefield_pa:.4g} Pa"
+                         + (f" [{self.free_field_method}]" if self.free_field_method else ""))
             lines.append(f"transmission     {self.transmission:.4f}  "
                          f"({self.transmission_db:+.2f} dB insertion loss for this placement)")
         if self.transmission_at_target is not None:
@@ -757,6 +772,180 @@ def compare_focal_boxes(traces_transcranial, traces_freefield, box_vox, target_v
 
 
 # ---------------------------------------------------------------------------
+# Analytic free-field twin (opt-in): Rayleigh-Sommerfeld instead of a second solve
+# ---------------------------------------------------------------------------
+
+#: Face drive (Pa) above which cumulative nonlinearity in the water path stops being
+#: negligible and the LINEAR analytic twin should not be trusted. The plane-wave shock
+#: distance is ``rho c^3 / (beta omega p)``; at 1e4 Pa, 1 MHz, beta 3.5 that is ~17 m, so a
+#: 0.1 m stand-off accumulates <1 % of a shock -- above it, use the full-wave twin.
+_RS_NONLINEAR_P0_PA = 1e4
+
+#: Cap sampling for the analytic twin, in wavelengths. The Rayleigh quadrature converges at
+#: second order (see the rayleigh-sommerfeld test suite); lambda/2 is already ~6e-4.
+_RS_CAP_SPACING_LAMBDA = 0.5
+
+
+def free_field_rs(deck_dir, *, alpha_db_mhz_cm: float | None = None,
+                  cap_spacing_lambda: float = _RS_CAP_SPACING_LAMBDA,
+                  interp_order: int = 3, backend: str = "auto", log=None):
+    """Free-field focal-box traces for a written transcranial deck, WITHOUT a second solve.
+
+    The free-field half of a forward pair is a focused bowl radiating into uniform water --
+    a homogeneous, source-to-target problem with nothing in the way, which is exactly what
+    Rayleigh-Sommerfeld integrates exactly. This evaluates it directly on the transcranial
+    deck's OWN focal box and OWN frame grid (read from ``forward_deck.json`` /
+    ``box_vox.npy``), so the pair stays comparable by construction rather than by matching
+    two decks by hand. Returns ``(traces, box_vox, info)`` -- the same triple
+    :func:`load_focal_box` returns for a solved deck, so it drops into
+    :func:`compare_focal_boxes` unchanged.
+
+    Opt-in, and deliberately NOT the default. It reproduces the deck's bowl geometry, drive
+    law, face amplitude, absorption and record window, but it is the ANALYTIC reference the
+    full-wave twin approximates -- not an emulation of it. It is the more accurate absolute
+    free-field pressure of the two, and that is exactly why substituting it changes the
+    ratio:
+
+    ==================================  ==========  =========
+    saimiri example, 1 MHz, 6 PPW        peak (Pa)   vs O'Neil
+    ==================================  ==========  =========
+    CW O'Neil focal gain k R (1-cos t)     13.779     --
+    this function (analytic cap, l/2)      14.040     +1.9 %
+    same, on the deck's own voxel cap      13.999     +1.6 %
+    the full-wave free-field solve         13.514     -1.9 %
+    ==================================  ==========  =========
+
+    The analytic rows sit above the CW closed form for two measured reasons: the focal
+    waveform is the drive's time DERIVATIVE, whose peak is 1.009x ``omega_0 max|p|`` for
+    this 2-cycle pulse, and the box maximum of a low-Fresnel-number bowl lands ~2 mm
+    proximal of the geometric focus, where the field is genuinely higher. The full-wave row
+    is ~3.5 % below them, and what pins that on the SOLVER rather than on this function is
+    the middle row plus a second case:
+
+    * feeding the deck's own staircased voxel cap into this integral moves the answer by
+      0.3 %, so the cap geometry is not the difference; and
+    * the mouse TIPS case, identical in kind but at **12 PPW**, has the full-wave twin and
+      this function agreeing to **0.4 %** (59.15 vs 59.38 Pa), both landing on the CW gain
+      of 59.36 to better than 0.5 %.
+
+    So the gap is grid resolution, and it closes as PPW rises -- 3.5 % at 6 PPW, 0.4 % at
+    12 PPW, on the same physics through the same code.
+
+    The consequence for insertion loss: a full-wave PAIR shares that deficit between
+    numerator and denominator and largely cancels it, whereas an exact analytic denominator
+    under a discretised numerator does not -- the transcranial run's own ~3.5 % then lands
+    in the ratio. So use the full-wave twin when the number you want is the RATIO, and this
+    one when you want the absolute free-field reference, cannot afford a second solve, or
+    have a bowl that will not fit the grid at all. Report which via
+    ``ForwardComparison.free_field_method``.
+
+    Remaining approximations: propagation is one-way and LINEAR (see
+    :data:`_RS_NONLINEAR_P0_PA`), and nothing re-radiates off the transducer face.
+
+    ``alpha_db_mhz_cm`` is the coupling water's absorption; ``None`` means read it from the
+    deck (which records what the full-wave twin would have used). Needs the
+    ``rayleigh-sommerfeld`` package.
+    """
+    try:
+        import rayleigh_sommerfeld as rs
+    except ImportError as exc:                            # pragma: no cover - env dependent
+        raise ImportError(
+            "the analytic free-field twin needs the 'rayleigh-sommerfeld' package "
+            "(pip install rayleigh-sommerfeld, or -e ../rayleigh-sommerfeld). Use "
+            "free_field='fullwave' for the two-solve pair instead.") from exc
+    from .sim.mlcompat import matlab_round, unit_pulse
+
+    deck_dir = Path(deck_dir)
+    info = json.loads((deck_dir / "forward_deck.json").read_text())
+    box = np.load(deck_dir / "box_vox.npy").astype(np.int64)
+
+    src = info["source"]
+    dx_mm = float(info["dx_mm"])
+    c0 = float(info["c0_ms"])
+    f0 = float(info["f0_hz"])
+    p0 = float(info["p0_pa"])
+    modT = int(info["modT"])
+    dT = float(info["dT_s"])
+    n_out = int(info["n_frames_expected"])
+    lam_mm = c0 / f0 * 1e3
+    roc_mm = float(src["roc_mm"])
+    aperture_mm = float(src["aperture_mm"])
+    half = float(np.arcsin(np.clip((aperture_mm / 2.0) / roc_mm, -1.0, 1.0)))
+    if aperture_mm / 2.0 > roc_mm:
+        raise ValueError(f"aperture {aperture_mm} mm exceeds twice the ROC {roc_mm} mm; "
+                         "that is not a spherical cap")
+
+    if float(info.get("beta", 0.0)) and p0 > _RS_NONLINEAR_P0_PA:
+        warnings.warn(
+            f"the analytic free-field twin is LINEAR but this deck drives {p0:.3g} Pa with "
+            f"beta={info['beta']}; above ~{_RS_NONLINEAR_P0_PA:.0g} Pa the water path "
+            "accumulates real nonlinearity that it cannot represent. Use "
+            "free_field='fullwave', or read the result as the linear reference only.")
+
+    if alpha_db_mhz_cm is None:
+        alpha_db_mhz_cm = float(info.get("water_alpha_db_mhz_cm") or 0.0)
+    alpha = (rs.aexp_alpha_np_per_m(alpha_db_mhz_cm, f0) if info.get("attenuation") else 0.0)
+
+    # the cap, in the deck's own voxel frame, then to metres
+    apex = np.asarray(src["apex_vox"], float)
+    target = np.asarray(src["target_vox"], float)
+    aim = np.asarray(src["aim"], float)
+    cap = rs.spherical_cap(apex * dx_mm * 1e-3, aim, roc_mm * 1e-3, half,
+                           cap_spacing_lambda * lam_mm * 1e-3)
+
+    # the deck's own drive law: tau = (max_i d_i - d_i)/c0, rounded to the time step
+    # (write_forward_deck._geometric_drive), so the two twins are steered identically.
+    d = np.linalg.norm(cap.xyz_m - target * dx_mm * 1e-3, axis=1)
+    delay = matlab_round((d.max() - d) / c0 / dT) * dT
+    cap = rs.SurfaceSource(cap.xyz_m, cap.area_m2, p0, delay)
+
+    pulse, _ = unit_pulse(dT, 2.0 * np.pi * f0)
+    if log:
+        log(f"  free field (analytic): {cap.n_elements} cap elements at lambda/"
+            f"{1.0 / cap_spacing_lambda:g}, {len(box)} box points, {n_out} frames")
+    traces = rs.propagate_pulse(cap, box.astype(float) * dx_mm * 1e-3, pulse, dT, c0=c0,
+                                n_out=n_out, out_stride=modT, out_offset=modT,
+                                alpha_np_per_m=alpha, interp_order=interp_order,
+                                backend=backend)
+    out = dict(info)
+    out.update(method="rayleigh_sommerfeld", n_box=int(len(box)),
+               rs_cap_elements=int(cap.n_elements),
+               rs_cap_spacing_lambda=float(cap_spacing_lambda),
+               rs_alpha_np_per_m=float(alpha), rs_interp_order=int(interp_order))
+    return traces, box, out
+
+
+def _water_alpha_db_mhz_cm(meta, alpha_map, c_map) -> float:
+    """Absorption the all-water twin carries, in the units the deck records.
+
+    Mirrors :func:`water_medium_like`: with no explicit map the c-porosity model returns
+    water's 0.4 dB/MHz/cm everywhere; with one, the median over the non-bone voxels.
+    """
+    if not (meta.get("attenuation") or meta.get("alpha_file")):
+        return 0.0
+    if alpha_map is None:
+        return 0.4
+    water = np.asarray(alpha_map, float)[np.asarray(c_map) <= float(meta.get("C0", WATER_C_MS))]
+    return float(np.median(water)) if water.size else 0.0
+
+
+def _normalise_free_field(free_field) -> str:
+    """``True``/``False``/``'fullwave'``/``'rs'``/``'none'`` -> a canonical mode string."""
+    if free_field is True:
+        return "fullwave"
+    if free_field is False or free_field is None:
+        return "none"
+    mode = str(free_field).lower()
+    if mode in ("fullwave", "full", "solve"):
+        return "fullwave"
+    if mode in ("rs", "rayleigh", "rayleigh_sommerfeld", "analytic"):
+        return "rs"
+    if mode in ("none", "off", "skip"):
+        return "none"
+    raise ValueError(f"free_field must be 'fullwave', 'rs' or 'none' (got {free_field!r})")
+
+
+# ---------------------------------------------------------------------------
 # The pair
 # ---------------------------------------------------------------------------
 
@@ -770,7 +959,7 @@ def _subject_medium(sim_dir, meta):
         "rho_file": meta.get("rho_file"), "alpha_file": meta.get("alpha_file")})
 
 
-def write_forward_pair(sim_dir, placement=None, out_dir="forward", *, free_field: bool = True,
+def write_forward_pair(sim_dir, placement=None, out_dir="forward", *, free_field=True,
                        box_half_mm: float = 12.0, modT: int = 2, p0: float = 1.0,
                        roc_mm=None, aperture_mm=None, density: float = 1.0,
                        apex_vox=None, target_vox=None, apex_mm=None, target_mm=None,
@@ -779,10 +968,19 @@ def write_forward_pair(sim_dir, placement=None, out_dir="forward", *, free_field
     """Write (and optionally solve) the transcranial + free-field forward decks.
 
     Returns ``{"source": BowlSource, "transcranial": (dir, info), "free_field": (dir, info)
-    or None}``. The two decks differ ONLY in their medium maps: same grid, same bowl
-    voxels, same drive, same focal box (see the module docstring). The medium maps are
-    written fresh for each -- they must never be hardlinked between the two runs, which is
-    exactly what would silently turn the pair into two identical solves.
+    or None, "free_field_mode": str}``. The two decks differ ONLY in their medium maps:
+    same grid, same bowl voxels, same drive, same focal box (see the module docstring). The
+    medium maps are written fresh for each -- they must never be hardlinked between the two
+    runs, which is exactly what would silently turn the pair into two identical solves.
+
+    ``free_field`` selects how the all-water twin is obtained:
+
+    * ``'fullwave'`` (or ``True``, the DEFAULT) -- a second full-wave solve. Nothing about
+      it is approximate, and it costs a second GPU run on the same grid.
+    * ``'rs'`` -- no second deck is written; the twin is integrated analytically from the
+      same bowl onto the same focal box by :func:`free_field_rs` at read-out time. Opt-in;
+      see that function for exactly what it does and does not model.
+    * ``'none'`` (or ``False``) -- transcranial only, no ratio.
     """
     from .sim import _common as C
     from .sim.launchers import _maybe_run
@@ -814,18 +1012,26 @@ def write_forward_pair(sim_dir, placement=None, out_dir="forward", *, free_field
         log(f"forward: {source.n_points} bowl voxels, apex {np.round(source.apex_vox, 1)} vox, "
             f"standoff {source.standoff_mm:.1f} mm, target {np.round(source.target_vox, 1)} vox")
 
+    mode = _normalise_free_field(free_field)
     media = [("transcranial", (c, rho, alpha))]
-    if free_field:
+    if mode == "fullwave":
         media.append(("free_field", water_medium_like(
             c, float(meta["C0"]),
             rho_map=(rho if meta.get("rho_file") else None), alpha_map=alpha)))
+    elif mode == "rs" and log:
+        log("  free field: analytic (Rayleigh-Sommerfeld) -- no second deck, no second solve")
+
+    # The absorption the all-water twin carries, recorded in the transcranial deck so the
+    # analytic twin reproduces it without needing the (multi-GB) medium maps again.
+    water_alpha = _water_alpha_db_mhz_cm(meta, alpha, c)
 
     decks = {"free_field": None}
     for label, medium in media:
         d = out_dir / label
         info = write_forward_deck(d, meta, source, *medium, box_half_mm=box_half_mm,
                                   modT=modT, p0=p0, attenuation=attenuation, beta=beta,
-                                  write_maps=write_maps)
+                                  write_maps=write_maps,
+                                  extra_info={"water_alpha_db_mhz_cm": water_alpha})
         if log:
             log(f"  wrote {label} deck {d} ({info['n_box']} box recorders, "
                 f"{info['n_frames_expected']} frames)")
@@ -834,22 +1040,25 @@ def write_forward_pair(sim_dir, placement=None, out_dir="forward", *, free_field
             if log:
                 log(f"  solved {label}")
         decks[label] = (d, info)
-    return {"source": source, **decks}
+    return {"source": source, "free_field_mode": mode, **decks}
 
 
-def run_forward_pair(sim_dir, placement=None, out_dir="forward", *, free_field: bool = True,
+def run_forward_pair(sim_dir, placement=None, out_dir="forward", *, free_field=True,
                      gpu: int = 0, box_half_mm: float = 12.0, modT: int = 2, p0: float = 1.0,
                      roc_mm=None, aperture_mm=None, density: float = 1.0,
                      apex_vox=None, target_vox=None, apex_mm=None, target_mm=None,
                      source: BowlSource | None = None, write_json: bool = True,
-                     log=None) -> ForwardComparison:
+                     rs_kwargs: dict | None = None, log=None) -> ForwardComparison:
     """Run the forward PAIR and compare: what the target sees through the skull, and what
     it would have seen with the skull replaced by water.
 
     ``sim_dir`` is a prepared sim tree (``skull-transparency prepare``); ``placement`` is a
     ``BowlPlacement``/placement dict/``placement.json`` path, or ``None`` to seat the bowl
-    on the tree's own approach axis (see :func:`bowl_source_from_placement`). Both solves
-    run on GPU ``gpu``; ``free_field=False`` skips the second one (and the ratio).
+    on the tree's own approach axis (see :func:`bowl_source_from_placement`).
+
+    ``free_field`` picks the all-water twin: ``'fullwave'`` (default) runs a second solve
+    on GPU ``gpu``; ``'rs'`` integrates it analytically instead (opt-in, one solve -- see
+    :func:`free_field_rs`, tune it via ``rs_kwargs``); ``'none'`` skips it and the ratio.
 
     Writes ``<out_dir>/forward.json`` (the :meth:`ForwardComparison.to_dict` payload) and
     leaves both solved decks in place for inspection. See the module docstring for the
@@ -874,9 +1083,13 @@ def run_forward_pair(sim_dir, placement=None, out_dir="forward", *, free_field: 
             raise ValueError("the two forward runs recorded different focal boxes; the pair "
                              "is not comparable (re-run both decks from one call).")
         run_dirs["free_field"] = str(ff_dir)
+    elif decks["free_field_mode"] == "rs":
+        traces_ff, _, ff_info = free_field_rs(tc_dir, log=log, **(rs_kwargs or {}))
+        run_dirs["free_field"] = ff_info["method"]
 
     cmp = compare_focal_boxes(traces_tc, traces_ff, box, src.target_vox,
                               float(info["dx_mm"]), run_dirs=run_dirs, source=src.to_dict())
+    cmp.free_field_method = decks["free_field_mode"]
     if write_json:
         (out_dir / "forward.json").write_text(json.dumps(cmp.to_dict(), indent=1))
     if log:

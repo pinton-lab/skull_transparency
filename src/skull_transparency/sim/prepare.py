@@ -154,7 +154,7 @@ def build_brain_center_run(c_map, affine, spec: TransducerSpec, out_sim_dir, *,
                            center_phys_mm=None, surround_mm: float = 25.0,
                            truncate_mm: float | None = None, si_axis: int = 2,
                            array_n_elements=None, attenuation: bool = False,
-                           alpha_units: str = "db_mhz_cm"):
+                           alpha_units: str = "db_mhz_cm", include_points_mm=None):
     """Brain-center variant of :func:`build_run_from_medium`: seat ONE omnidirectional
     point source at the brain center and size a cube that holds the WHOLE head, so a
     single outward solve illuminates the entire calvaria for a neutral whole-skull
@@ -165,7 +165,13 @@ def build_brain_center_run(c_map, affine, spec: TransducerSpec, out_sim_dir, *,
     ``center_phys_mm`` to override. No ``--approach`` is needed (the source radiates in
     every direction), so this also sidesteps the unimplemented ``approach='auto'`` path.
     The recording shell spans the whole skull (no window cap), so the outward record
-    length covers the farthest bone. Returns the ``out_sim_dir`` path."""
+    length covers the farthest bone. Returns the ``out_sim_dir`` path.
+
+    ``include_points_mm`` ((n, 3) world mm) additionally forces those points inside the
+    grid with ``surround_mm`` clearance -- pass a transducer's face points when the tree
+    also has to carry a forward solve, instead of inflating ``surround_mm`` (which pads
+    all six faces and so costs the cube of the standoff). See
+    :func:`_choose_pose_centered`."""
     out_sim_dir = Path(out_sim_dir)
     out_sim_dir.mkdir(parents=True, exist_ok=True)
     affine = np.asarray(affine, float)
@@ -177,7 +183,8 @@ def build_brain_center_run(c_map, affine, spec: TransducerSpec, out_sim_dir, *,
 
     pose = _choose_pose_centered(c_map, affine, center_phys_mm, spec,
                                  surround_mm=surround_mm, bone_threshold=bone_threshold,
-                                 truncate_mm=truncate_mm, si_axis=si_axis)
+                                 truncate_mm=truncate_mm, si_axis=si_axis,
+                                 include_points_mm=include_points_mm)
 
     def _emit(vol, name, background):
         g = _resample_to_grid(vol, affine, pose, spec.dx_m, background=background)
@@ -326,7 +333,8 @@ def _choose_pose(c_map, affine, target_phys_mm, approach, spec, standoff_mm, *,
 
 def _choose_pose_centered(c_map, affine, center_phys_mm, spec, *,
                           surround_mm: float = 25.0, bone_threshold: float = 2200.0,
-                          truncate_mm: float | None = None, si_axis: int = 2) -> Pose:
+                          truncate_mm: float | None = None, si_axis: int = 2,
+                          include_points_mm=None) -> Pose:
     """OMNIDIRECTIONAL seat for a brain-center run: the grid is sized to the head's own
     world-axis-aligned bounding box plus ``surround_mm`` of coupling medium on every side,
     and the source is planted at the brain-center voxel (NOT forced to the grid center).
@@ -341,7 +349,17 @@ def _choose_pose_centered(c_map, affine, center_phys_mm, spec, *,
     (world +z superior by default) to at most ``truncate_mm`` on the longer side of the
     source, cutting the spine/mandible tail that neither the vault windows nor the brain-
     center field need. The short (vault) side is kept in full; a ``surround_mm`` water gap
-    is left below the cut. Off by default (whole head)."""
+    is left below the cut. Off by default (whole head).
+
+    ``include_points_mm`` (optional, ``(n, 3)`` world mm) names points that must also fit
+    inside the grid with the same ``surround_mm`` clearance -- in practice a transducer's
+    face voxels, for a forward run that has to drive the real device. Pass it INSTEAD of
+    inflating ``surround_mm``: ``surround_mm`` pads all six faces, so buying standoff with
+    it costs ``(head + 2*standoff)^3`` -- for the 80 mm-focal-length TIPS on a mouse head
+    that is ~11.8 G cells, against ~0.13 G for the same bowl declared here (the reason the
+    shipped mouse case had to substitute an 18 mm bowl instead). The union is taken AFTER
+    ``truncate_mm``, so truncation can never clip the transducer off the grid. Points may
+    lie anywhere; only their bounding box matters."""
     c = np.asarray(c_map)
     affine = np.asarray(affine, float)
     center = np.asarray(center_phys_mm, float)
@@ -363,6 +381,14 @@ def _choose_pose_centered(c_map, affine, center_phys_mm, spec, *,
             bbmin[a] = max(bbmin[a], center[a] - float(truncate_mm) - surround_mm)
         else:                                                         # longer tail above the source
             bbmax[a] = min(bbmax[a], center[a] + float(truncate_mm) + surround_mm)
+    if include_points_mm is not None:                                  # e.g. the transducer face
+        pts = np.asarray(include_points_mm, float).reshape(-1, 3)
+        if pts.size:
+            if not np.isfinite(pts).all():
+                raise ValueError("include_points_mm contains non-finite coordinates")
+            # after the truncation, so a trim can never clip the transducer off the grid
+            bbmin = np.minimum(bbmin, pts.min(0) - surround_mm)
+            bbmax = np.maximum(bbmax, pts.max(0) + surround_mm)
     shape = np.ceil((bbmax - bbmin) / dx_mm).astype(int)              # per-axis interior dims
     shape = ((shape + 1) // 2) * 2                                     # even per axis
     target_grid_vox = (center - bbmin) / dx_mm                        # brain-center source in the box

@@ -1,0 +1,11 @@
+{
+ "schema": "skull_transparency.positioning_score/1",
+ "normalized": 1.0,
+ "focal_pressure_proxy": 1.3263055947292778e-05,
+ "incidence_deg": 33.71172115426153,
+ "objective": "peak",
+ "target_name": "saimiri_brain_center",
+ "definition": "normalized = delivered coupling at the chosen placement / the loss-free ideal for that device (1.0 = no loss). For bowl/peak placement the optimiser returns the optimal window, so it is 1.0 by construction; for the CTX-500 cap it is the fraction of cap energy surviving the foramen/incidence drop (J_cap/J_full), <1 when a leak is unavoidable. focal_pressure_proxy = sqrt(integral_S |G|^2 dS) = the relative achievable focal peak under the optimal time-reversal drive (arb. units) \u2014 a PLACEMENT/energy proxy that OVERSTATES the broadband focusing gain and axial DOF; quote those from a broadband/inward re-simulation. incidence_deg = window incidence (0 = normal).",
+ "n_footprint_patches": 15281,
+ "candidate_scores_max": 1.7590865306101836e-10
+}

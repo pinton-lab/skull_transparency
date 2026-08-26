@@ -143,6 +143,21 @@ def _cmd_transparency(args):
     return 0
 
 
+def _tmap_for(bundle, args, verbose=False):
+    """Transparency map honouring the medium's calvarial cutoff.
+
+    The bundle records the producer's ``bone_threshold`` precisely so a non-human /
+    thin-bone medium (whose bone is far slower than the human 2200 m/s default) resolves
+    the same surface everywhere downstream. ``--bone-threshold`` overrides it."""
+    import skull_transparency as st
+    thr = (getattr(args, "bone_threshold", None)
+           if getattr(args, "bone_threshold", None) is not None
+           else float(bundle.physics.get("bone_threshold", 2200.0)))
+    return st.compute_transparency_map(
+        bundle, options=st.TransparencyOptions(bone_threshold=thr),
+        log=(print if verbose else None))
+
+
 def _cmd_place(args):
     import skull_transparency as st
     from .score import PositioningScore
@@ -150,7 +165,7 @@ def _cmd_place(args):
     out.mkdir(parents=True, exist_ok=True)
 
     bundle = st.load_bundle(args.bundle)
-    tmap = st.compute_transparency_map(bundle, log=(print if args.verbose else None))
+    tmap = _tmap_for(bundle, args, args.verbose)
     tmap.to_npz(out / "surface_map.npz")
 
     if args.transducer:
@@ -187,7 +202,7 @@ def _cmd_position(args):
     import skull_transparency as st
     from .position_tool import preview_placement, view_napari
     bundle = st.load_bundle(args.bundle)
-    tmap = st.compute_transparency_map(bundle, log=(print if args.verbose else None))
+    tmap = _tmap_for(bundle, args, args.verbose)
     bc = (_load_transducer(args.transducer).to_bowl_constraints(focal_length_mm=args.focal_length)
           if args.transducer else st.BowlConstraints(focal_length_mm=args.focal_length or 60.0))
     pl = st.place_bowl(tmap, bc)
@@ -228,7 +243,7 @@ def _cmd_explore(args):
         return 0
     bundle_path, tname = _resolve_bundle(args)
     from .position_tool import preview_placement, view_napari
-    tmap = st.compute_transparency_map(st.load_bundle(bundle_path))
+    tmap = _tmap_for(st.load_bundle(bundle_path), args)
     bc = (_load_transducer(args.transducer).to_bowl_constraints(focal_length_mm=args.focal_length)
           if args.transducer else st.BowlConstraints(focal_length_mm=args.focal_length or 60.0))
     pl = st.place_bowl(tmap, bc)
@@ -253,7 +268,7 @@ def _cmd_report(args):
     import skull_transparency as st
     from .report import write_report
     bundle_path, tname = _resolve_bundle(args)
-    tmap = st.compute_transparency_map(st.load_bundle(bundle_path))
+    tmap = _tmap_for(st.load_bundle(bundle_path), args)
     bc = (_load_transducer(args.transducer).to_bowl_constraints(focal_length_mm=args.focal_length)
           if args.transducer else st.BowlConstraints(focal_length_mm=args.focal_length or 60.0))
     pl = st.place_bowl(tmap, bc)
@@ -268,7 +283,8 @@ def _cmd_report(args):
 def _cmd_forward(args):
     from .forward import run_forward_pair, write_forward_pair
     vec = lambda s: (_parse_vec(s) if s else None)
-    kw = dict(free_field=not args.no_free_field, box_half_mm=args.box_mm, modT=args.modt,
+    ff = "none" if args.no_free_field else args.free_field
+    kw = dict(free_field=ff, box_half_mm=args.box_mm, modT=args.modt,
               p0=args.p0, roc_mm=args.roc_mm, aperture_mm=args.aperture_mm,
               density=args.density, apex_mm=vec(args.apex_mm), target_mm=vec(args.target_mm),
               apex_vox=vec(args.apex_vox), target_vox=vec(args.target_vox))
@@ -347,6 +363,9 @@ def build_parser():
     sp.add_argument("--target-name", default=None)
     sp.add_argument("--verbose", action="store_true")
     sp.add_argument("--out", required=True, help="output directory")
+    sp.add_argument("--bone-threshold", type=float, default=None,
+                    help="bone sound-speed cutoff m/s for the calvarial surface "
+                         "(default: the bundle's physics.bone_threshold)")
     sp.set_defaults(func=_cmd_place)
 
     sp = sub.add_parser("extract", help="solved run (genout_mod.dat) + sim tree -> Field Bundle")
@@ -367,6 +386,9 @@ def build_parser():
     sp.add_argument("--interactive", action="store_true", help="open the napari viewer (needs a display + [viz])")
     sp.add_argument("--verbose", action="store_true")
     sp.add_argument("--out", default=None, help="output PNG (default placement_preview.png)")
+    sp.add_argument("--bone-threshold", type=float, default=None,
+                    help="bone sound-speed cutoff m/s for the calvarial surface "
+                         "(default: the bundle's physics.bone_threshold)")
     sp.set_defaults(func=_cmd_position)
 
     sp = sub.add_parser("transparency",
@@ -401,6 +423,9 @@ def build_parser():
     sp.add_argument("--list-targets", action="store_true", help="list the gallery and exit")
     sp.add_argument("--no-viewer", action="store_true", help="write a static preview PNG instead")
     sp.add_argument("--out", default=None, help="preview PNG path (with --no-viewer)")
+    sp.add_argument("--bone-threshold", type=float, default=None,
+                    help="bone sound-speed cutoff m/s for the calvarial surface "
+                         "(default: the bundle's physics.bone_threshold)")
     sp.set_defaults(func=_cmd_explore)
 
     sp = sub.add_parser("report",
@@ -410,6 +435,9 @@ def build_parser():
                     help="output path; an .pdf suffix (or --pdf) also renders a PDF")
     sp.add_argument("--pdf", action="store_true", help="render a PDF as well as the HTML")
     sp.add_argument("--title", default=None)
+    sp.add_argument("--bone-threshold", type=float, default=None,
+                    help="bone sound-speed cutoff m/s for the calvarial surface "
+                         "(default: the bundle's physics.bone_threshold)")
     sp.set_defaults(func=_cmd_report)
 
     sp = sub.add_parser("forward",
@@ -435,8 +463,13 @@ def build_parser():
     sp.add_argument("--modt", type=int, default=2, help="record one frame every modT steps")
     sp.add_argument("--p0", type=float, default=1.0, help="drive amplitude at the bowl face (Pa)")
     sp.add_argument("--gpu", type=int, default=0, help="CUDA device for both solves")
+    sp.add_argument("--free-field", choices=("fullwave", "rs", "none"), default="fullwave",
+                    help="how to get the all-water twin: 'fullwave' (default) runs a second "
+                         "solve; 'rs' integrates it analytically from the same bowl onto the "
+                         "same focal box (one solve instead of two, needs the "
+                         "rayleigh-sommerfeld package); 'none' skips it")
     sp.add_argument("--no-free-field", action="store_true",
-                    help="skip the all-water twin (no transmission ratio, transcranial only)")
+                    help="deprecated alias for --free-field none")
     sp.add_argument("--no-run", action="store_true",
                     help="write both decks and stop (no solver, no GPU needed)")
     sp.add_argument("--out", required=True, help="output directory for the two runs + forward.json")

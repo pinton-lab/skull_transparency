@@ -733,31 +733,65 @@ def append_animated_page(pdf_path, movie, *, fps=None, caption="", timeout_s: fl
     return pdf_path
 
 
-def forward_peak_volumes(forward_dir, out_npz=None):
+def forward_peak_volumes(forward_dir, out_npz=None, *, free_field: str = "auto",
+                         rs_kwargs: dict | None = None):
     """Reduce a solved forward pair to the small artifact the report needs.
 
     Each solved run holds gigabytes of focal-box time traces; all the comparison figure
     wants is the peak |p| at every box point. This writes (or returns) those two volumes
     plus the box geometry, so the traces can be deleted afterwards and the figure still
     regenerates in a second. Returns a dict with ``transcranial``/``free_field`` peak
-    volumes (Pa, dense box grid), ``origin_vox``, and ``dx_mm``."""
+    volumes (Pa, dense box grid), ``origin_vox``, ``dx_mm``, and
+    ``free_field_method`` -- ``'fullwave'`` or ``'rs'``.
+
+    ``free_field`` selects where the all-water volume comes from:
+
+    * ``'auto'`` (default) -- the solved ``free_field/`` deck when it is there, otherwise
+      integrate it analytically from the transcranial deck's own bowl and box
+      (:func:`skull_transparency.forward.free_field_rs`). A pair run with
+      ``--free-field rs`` never writes that second deck, so without the fallback its
+      figure could not be drawn at all;
+    * ``'fullwave'`` -- require the solved deck, and omit the row if it is absent;
+    * ``'rs'`` -- always integrate it, even when the solved deck exists (useful for
+      putting the two side by side).
+
+    Always read ``free_field_method`` back before quoting a ratio off these volumes: the
+    analytic twin is the more accurate absolute field but does not cancel the solver's
+    discretisation the way a full-wave pair does (see :func:`~.forward.free_field_rs`).
+    """
     from .forward import load_focal_box
+    if free_field not in ("auto", "fullwave", "rs"):
+        raise ValueError(f"free_field must be 'auto', 'fullwave' or 'rs' (got {free_field!r})")
     forward_dir = Path(forward_dir)
-    out = {}
-    for label in ("transcranial", "free_field"):
-        run = forward_dir / label
-        if not (run / "genout.dat").exists():
-            continue
-        traces, box, info = load_focal_box(run)
+
+    def _volume(traces, box, info, out):
         peak = np.abs(np.asarray(traces, float)).max(axis=0)      # peak |p| per point (Pa)
         box = np.asarray(box, np.int64)
         lo = box.min(0)
         shape = tuple((box.max(0) - lo + 1).tolist())
         vol = np.zeros(shape, float)
         vol[tuple((box - lo).T)] = peak
-        out[label] = vol
         out["origin_vox"] = lo.astype(float)
         out["dx_mm"] = float(info.get("dx_mm", 1.0))
+        return vol
+
+    out = {}
+    for label in ("transcranial", "free_field"):
+        run = forward_dir / label
+        if not (run / "genout.dat").exists():
+            continue
+        if label == "free_field" and free_field == "rs":
+            continue                                   # asked for the analytic one instead
+        out[label] = _volume(*load_focal_box(run), out)
+        if label == "free_field":
+            out["free_field_method"] = "fullwave"
+
+    if "free_field" not in out and free_field in ("auto", "rs") and "transcranial" in out:
+        from .forward import free_field_rs
+        traces, box, info = free_field_rs(forward_dir / "transcranial", **(rs_kwargs or {}))
+        out["free_field"] = _volume(traces, box, info, out)
+        out["free_field_method"] = "rs"
+
     if out_npz and out:
         np.savez_compressed(out_npz, **out)
     return out
@@ -799,6 +833,11 @@ def _forward_figure(peaks, placement, reg, comparison=None, c_map=None, c0=None,
     if np.any(ctr < -1) or np.any(ctr > np.asarray(peaks["transcranial"]).shape) + 1:
         pass                                            # (checked below, per-plane clipping)
     vmax = max(float(np.asarray(peaks[k]).max()) for k in ("transcranial", "free_field"))
+    # say which twin drew the bottom row: an analytic one is a different kind of number
+    # from a second solve, and the ratio a reader takes off the panels depends on it
+    ff_method = str(np.asarray(peaks.get("free_field_method", "fullwave")).item()
+                    if "free_field_method" in peaks else "fullwave")
+    ff_tag = "  (Rayleigh-Sommerfeld)" if ff_method == "rs" else ""
 
     # skull background: only when the forward grid and the bundle agree on pitch and the
     # bundle's world axes are the grid axes (both hold for runs prepared from one medium)
@@ -861,7 +900,7 @@ def _forward_figure(peaks, placement, reg, comparison=None, c_map=None, c0=None,
                 ax.set_title(name, fontsize=10)
             ax.set_xlabel(xl, fontsize=8)
             row_lbl = ("through the skull" if r == 0
-                       else "free field\n(no skull; dashed = where bone would be)")
+                       else f"free field{ff_tag}\n(no skull; dashed = where bone would be)")
             ax.set_ylabel(f"{row_lbl}\n{yl}" if c == 0 else yl, fontsize=8)
             ax.tick_params(labelsize=7)
     fig.colorbar(im, ax=axes, fraction=0.016, pad=0.01).set_label("peak |p| (Pa)", fontsize=9)

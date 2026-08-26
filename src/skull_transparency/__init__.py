@@ -20,6 +20,8 @@ from .score import PositioningScore
 from .sample import make_synthetic_bundle
 from .brain_center import (MNI_BRAIN_COM_MM, intracranial_centroid, cavity_mask_centroid,
                            brain_center_phys_mm, brain_center_from_registration)
+from .access import (access_mask, escape_directions, cap_clearance, AccessInfo,
+                     Opening, fibonacci_directions)
 from .render import render_transparency_surface
 
 __all__ = [
@@ -45,5 +47,7 @@ __all__ = [
     "intracranial_centroid", "cavity_mask_centroid",
     "brain_center_phys_mm", "brain_center_from_registration",
     "render_transparency_surface",
+    "access_mask", "escape_directions", "cap_clearance", "AccessInfo", "Opening",
+    "fibonacci_directions",
 ]
 __version__ = "0.1.0"

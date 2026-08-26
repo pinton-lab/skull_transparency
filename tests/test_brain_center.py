@@ -185,3 +185,106 @@ def test_build_brain_center_run_writes_centered_sim_tree(tmp_path):
     reg = Registration.from_json(out / "registration.json")
     assert np.allclose(reg.target_fullres_voxel, dent)
     assert reg.world_frame == "subject_ras_mm"
+
+
+# ---------------------------------------------------------------------------
+# include_points_mm: fitting a standoff transducer without inflating surround_mm
+# ---------------------------------------------------------------------------
+
+def _bowl_pts_mm(apex_mm, aim, roc_mm, half_deg, n=400):
+    """A crude spherical-cap point cloud in world mm (enough to exercise the bbox union)."""
+    from skull_transparency.transducer import build_cap
+    pts, _ = build_cap(np.asarray(apex_mm, float), np.asarray(aim, float), roc_mm,
+                       half_angle_deg=half_deg, density=0.15)
+    return pts
+
+
+def test_include_points_grows_only_the_side_the_transducer_is_on():
+    """The declared points must extend the box toward them and leave the far side alone --
+    that anisotropy is the whole saving over raising surround_mm (which pads all six)."""
+    spec = TransducerSpec.ctx500(f0_hz=1e6, ppw=6.0)
+    c = _shell(N=90, center=(45, 40, 50))
+    center = np.array([45.0, 40.0, 50.0])
+    base = _choose_pose_centered(c, np.eye(4), center, spec, surround_mm=5.0)
+    apex = center + np.array([0.0, 0.0, 40.0])                   # bowl standing off along +z
+    pts = _bowl_pts_mm(apex, [0, 0, -1.0], 30.0, 25.0)
+    grown = _choose_pose_centered(c, np.eye(4), center, spec, surround_mm=5.0,
+                                  include_points_mm=pts)
+    bs, gs = base.grid_shape(), grown.grid_shape()
+    assert gs[2] > bs[2]                                          # +z axis grew to hold the bowl
+    assert gs[0] == bs[0] and gs[1] == bs[1]                      # bowl is inside laterally
+    # it grew on the +z side only: the source keeps its distance to the low-z face
+    assert abs(grown.target_grid_vox[2] - base.target_grid_vox[2]) <= 1.0
+
+
+def test_include_points_are_inside_the_grid_with_clearance():
+    spec = TransducerSpec.ctx500(f0_hz=1e6, ppw=6.0)
+    c = _shell(N=90, center=(45, 40, 50))
+    center = np.array([45.0, 40.0, 50.0])
+    surround = 6.0
+    apex = center + np.array([10.0, 0.0, 35.0])
+    pts = _bowl_pts_mm(apex, center - apex, 30.0, 25.0)
+    pose = _choose_pose_centered(c, np.eye(4), center, spec, surround_mm=surround,
+                                 include_points_mm=pts)
+    reg = Registration(pose.R_phys_to_grid, spec.dx_mm, pose.target_phys_mm, pose.target_grid_vox)
+    vox = np.asarray([reg.mni_to_fullres(p) for p in pts], float)
+    shape = np.asarray(pose.grid_shape(), float)
+    assert np.all(vox > 0) and np.all(vox < shape)
+    # every point keeps ~surround_mm of medium between it and the nearest face
+    clear = np.minimum(vox.min(0), (shape - vox.max(0))) * spec.dx_mm
+    assert np.all(clear >= surround - spec.dx_mm)
+
+
+def test_include_points_beats_inflating_surround():
+    """Same bowl, two ways: declaring it costs far fewer cells than buying the standoff
+    with surround_mm, because surround_mm pads all six faces (cubic in the standoff)."""
+    spec = TransducerSpec.ctx500(f0_hz=1e6, ppw=6.0)
+    c = _shell(N=90, center=(45, 40, 50))
+    center = np.array([45.0, 40.0, 50.0])
+    reach = 40.0
+    apex = center + np.array([0.0, 0.0, reach])
+    pts = _bowl_pts_mm(apex, [0, 0, -1.0], 30.0, 25.0)
+    declared = _choose_pose_centered(c, np.eye(4), center, spec, surround_mm=5.0,
+                                     include_points_mm=pts)
+    inflated = _choose_pose_centered(c, np.eye(4), center, spec, surround_mm=5.0 + reach)
+    assert np.prod(inflated.grid_shape()) > 2.0 * np.prod(declared.grid_shape())
+
+
+def test_include_points_survives_truncation():
+    """Truncation must never clip the transducer off the grid: the union is taken after it."""
+    spec = TransducerSpec.ctx500(f0_hz=5e5, ppw=6.0)
+    N, Z = 90, 320
+    c = np.full((N, N, Z), 1540.0, np.float32)
+    c[42:48, 42:48, 20:300] = 2900.0
+    c[30:60, 30:60, 250:300] = 2900.0
+    affine = np.diag([0.5, 0.5, 0.5, 1.0])
+    center = (affine @ np.array([45, 45, 275, 1.0]))[:3]
+    below = center - np.array([0.0, 0.0, 90.0])                   # deep in the truncated tail
+    pose = _choose_pose_centered(c, affine, center, spec, surround_mm=12.0,
+                                 truncate_mm=40.0, si_axis=2, include_points_mm=below[None, :])
+    reg = Registration(pose.R_phys_to_grid, spec.dx_mm, pose.target_phys_mm, pose.target_grid_vox)
+    v = reg.mni_to_fullres(below)
+    assert np.all(v > 0) and np.all(v < np.asarray(pose.grid_shape()))
+
+
+def test_include_points_rejects_non_finite():
+    spec = TransducerSpec.ctx500(f0_hz=1e6, ppw=6.0)
+    c = _shell(N=90, center=(45, 40, 50))
+    with pytest.raises(ValueError, match="non-finite"):
+        _choose_pose_centered(c, np.eye(4), np.array([45.0, 40.0, 50.0]), spec,
+                              surround_mm=5.0,
+                              include_points_mm=np.array([[45.0, 40.0, np.nan]]))
+
+
+def test_build_brain_center_run_threads_include_points(tmp_path):
+    spec = TransducerSpec.ctx500(f0_hz=1e6, ppw=6.0)
+    c = _shell(N=90, center=(45, 40, 50))
+    center = np.array([45.0, 40.0, 50.0])
+    pts = center + np.array([[0.0, 0.0, 40.0]])
+    a = build_brain_center_run(c, np.eye(4), spec, tmp_path / "a", center_phys_mm=center,
+                               surround_mm=5.0)
+    b = build_brain_center_run(c, np.eye(4), spec, tmp_path / "b", center_phys_mm=center,
+                               surround_mm=5.0, include_points_mm=pts)
+    sa = json.loads((a / "meta.json").read_text())["grid_shape"]
+    sb = json.loads((b / "meta.json").read_text())["grid_shape"]
+    assert sb[2] > sa[2] and sb[:2] == sa[:2]

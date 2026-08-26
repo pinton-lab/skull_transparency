@@ -23,7 +23,8 @@ registration = ["nibabel>=5.0", "tuba"]                  # MNI<->subject via tub
 viz = ["matplotlib>=3.7", "napari[all]", "imageio-ffmpeg", "scikit-image"]  # surface render / movie / viewer (napari[all] pulls the Qt backend)
 dev = ["pytest>=7.4"]
 solver = ["fullwave2-ultra"]   # GPU preflight + binary resolution for run_solver=True (bench_3d_opt)
-# NB: `tuba` and `fullwave2-ultra` are NOT on PyPI — the [registration]/[solver]
+analytic = ["rayleigh-sommerfeld"]  # opt-in analytic free-field twin (`forward --free-field rs`)
+# NB: `tuba`, `fullwave2-ultra` and `rayleigh-sommerfeld` are NOT on PyPI — the [registration]/[solver]
 # extras resolve them from their pinton-lab GitHub repos via [tool.uv.sources] below
 # (or `pip install "git+https://github.com/pinton-lab/<name>.git"`). The base install
 # (numpy/scipy) needs neither. The CUDA solver EXECUTABLE (fullwave2-ultra `bench_3d_opt`)
@@ -44,3 +45,4 @@ skull_transparency = ["gallery_registry.json"]
 # against sibling checkouts, override with `uv sync --editable ../tuba` etc.
 tuba = { git = "https://github.com/pinton-lab/tuba.git" }
 fullwave2-ultra = { git = "https://github.com/pinton-lab/fullwave2-ultra.git" }
+rayleigh-sommerfeld = { git = "https://github.com/pinton-lab/rayleigh-sommerfeld.git" }

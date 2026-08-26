@@ -14,6 +14,7 @@ it is opt-in rather than part of every run::
 import json
 import os
 import shutil
+import warnings
 
 import numpy as np
 import pytest
@@ -380,3 +381,239 @@ def test_forward_pair_end_to_end(tmp_path):
     assert cmp.transmission <= 1.0 and cmp.transmission_db <= 0.0
     assert cmp.transmission_at_target <= 1.0
     assert (tmp_path / "fwd" / "forward.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Analytic (Rayleigh-Sommerfeld) free-field twin -- opt-in, full wave stays default
+# ---------------------------------------------------------------------------
+
+try:                                  # optional: only the analytic-twin tests need it
+    import rayleigh_sommerfeld as rs_mod
+except ImportError:                    # a module-level importorskip would skip this WHOLE file
+    rs_mod = None
+requires_rs = pytest.mark.skipif(rs_mod is None,
+                                 reason="needs the optional rayleigh-sommerfeld package")
+
+
+@pytest.mark.parametrize("value,mode", [
+    (True, "fullwave"), ("fullwave", "fullwave"), ("FULLWAVE", "fullwave"),
+    ("rs", "rs"), ("analytic", "rs"), ("rayleigh_sommerfeld", "rs"),
+    (False, "none"), (None, "none"), ("none", "none"),
+])
+def test_free_field_mode_aliases(value, mode):
+    assert F._normalise_free_field(value) == mode
+
+
+def test_free_field_mode_rejects_garbage():
+    with pytest.raises(ValueError, match="fullwave"):
+        F._normalise_free_field("sort-of")
+
+
+@requires_rs
+def test_rs_mode_writes_only_the_transcranial_deck(tmp_path):
+    """The point of the analytic twin: one deck, one solve, no second medium on disk."""
+    sim = tmp_path / "sim"
+    _write_sim_tree(sim, n=64, dx_m=1e-3, target=(32, 32, 12))
+    out = tmp_path / "fwd"
+    decks = F.write_forward_pair(sim, out_dir=out, free_field="rs", roc_mm=20.0,
+                                 aperture_mm=16.0, density=0.4, box_half_mm=5.0,
+                                 write_maps=False, run_solver=False)
+    assert decks["free_field"] is None and decks["free_field_mode"] == "rs"
+    assert (out / "transcranial" / "forward_deck.json").exists()
+    assert not (out / "free_field").exists()
+
+
+def test_fullwave_stays_the_default(tmp_path):
+    sim = tmp_path / "sim"
+    _write_sim_tree(sim, n=64, dx_m=1e-3, target=(32, 32, 12))
+    decks = F.write_forward_pair(sim, out_dir=tmp_path / "fwd", roc_mm=20.0,
+                                 aperture_mm=16.0, density=0.4, box_half_mm=5.0,
+                                 write_maps=False, run_solver=False)
+    assert decks["free_field_mode"] == "fullwave"
+    assert decks["free_field"] is not None
+
+
+def _rs_deck(tmp_path, **kw):
+    sim = tmp_path / "sim"
+    _write_sim_tree(sim, n=64, dx_m=1e-3, target=(32, 32, 12), **kw)
+    out = tmp_path / "fwd"
+    F.write_forward_pair(sim, out_dir=out, free_field="rs", roc_mm=20.0, aperture_mm=16.0,
+                         density=0.4, box_half_mm=5.0, write_maps=False, run_solver=False)
+    return out / "transcranial"
+
+
+@requires_rs
+def test_free_field_rs_matches_the_deck_box_and_frame_grid(tmp_path):
+    """Comparability is by construction: same box rows, same frame count, same order."""
+    deck = _rs_deck(tmp_path)
+    info = json.loads((deck / "forward_deck.json").read_text())
+    traces, box, out = F.free_field_rs(deck, backend="numpy")
+    assert traces.shape == (info["n_frames_expected"], info["n_box"])
+    assert np.array_equal(box, np.load(deck / "box_vox.npy").astype(np.int64))
+    assert out["method"] == "rayleigh_sommerfeld"
+    assert np.isfinite(traces).all() and np.abs(traces).max() > 0
+
+
+@requires_rs
+def test_free_field_rs_reaches_the_oneil_focal_gain(tmp_path):
+    """The absolute calibration end to end: |p| AT THE GEOMETRIC FOCUS must land on the
+    analytic CW gain. This is what makes it a REFERENCE, not just a fast twin.
+
+    Read it at the target, not at the box maximum: this synthetic tree is f/1.25 with an
+    aperture of only ~5 wavelengths (Fresnel number ~1), so the true maximum is pulled well
+    proximal of the geometric focus and out of the box. At the focus itself every element
+    is exactly one ROC away, so the closed form applies whatever the Fresnel number; the
+    residual few percent is the short pulse (the focal waveform is the drive's derivative)
+    against the coarse sample grid."""
+    deck = _rs_deck(tmp_path)
+    info = json.loads((deck / "forward_deck.json").read_text())
+    src = info["source"]
+    assert src["focus_to_target_mm"] < 1e-6, "this test wants the bowl focused on target"
+    k = 2 * np.pi * info["f0_hz"] / info["c0_ms"]
+    half = np.arcsin(src["aperture_mm"] / 2 / src["roc_mm"])
+    gain = rs_mod.focal_gain_oneil(src["roc_mm"] * 1e-3, half, k)
+    traces, box, _ = F.free_field_rs(deck, backend="numpy")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")               # peak on the box edge: expected here
+        m = F.focal_metrics(traces, box, np.asarray(src["target_vox"], float),
+                            float(info["dx_mm"]))
+    assert 0.95 < m.peak_at_target_pa / gain < 1.10
+
+
+@requires_rs
+def test_free_field_rs_scales_linearly_with_the_drive(tmp_path):
+    a = F.free_field_rs(_rs_deck(tmp_path / "a"), backend="numpy")[0]
+    sim = tmp_path / "b" / "sim"
+    _write_sim_tree(sim, n=64, dx_m=1e-3, target=(32, 32, 12))
+    out = tmp_path / "b" / "fwd"
+    F.write_forward_pair(sim, out_dir=out, free_field="rs", roc_mm=20.0, aperture_mm=16.0,
+                         density=0.4, box_half_mm=5.0, p0=7.0, write_maps=False,
+                         run_solver=False)
+    b = F.free_field_rs(out / "transcranial", backend="numpy")[0]
+    assert np.abs(b - 7.0 * a).max() < 1e-4 * np.abs(b).max()
+
+
+@requires_rs
+def test_free_field_rs_applies_the_decks_water_absorption(tmp_path):
+    """attenuation on -> the twin must lose amplitude, by the solver's own Aexp law."""
+    deck = _rs_deck(tmp_path)
+    info = json.loads((deck / "forward_deck.json").read_text())
+    tgt = np.asarray(info["source"]["target_vox"], float)
+    dx = float(info["dx_mm"])
+
+    def at_target():
+        tr, box, _ = F.free_field_rs(deck, backend="numpy")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")           # peak on the box edge: see the test above
+            return F.focal_metrics(tr, box, tgt, dx).peak_at_target_pa
+
+    lossless = at_target()
+    info.update(attenuation=True, water_alpha_db_mhz_cm=0.4)
+    (deck / "forward_deck.json").write_text(json.dumps(info))
+    lossy = at_target()
+    # read it at the focus, where EVERY element is exactly one ROC away, so the expected
+    # loss is the closed form rather than an average over a spread of path lengths
+    a = rs_mod.aexp_alpha_np_per_m(0.4, info["f0_hz"])
+    assert lossy < lossless
+    assert lossy / lossless == pytest.approx(np.exp(-a * info["source"]["roc_mm"] * 1e-3),
+                                             rel=1e-4)
+
+
+@requires_rs
+def test_free_field_rs_warns_on_a_nonlinear_drive(tmp_path):
+    deck = _rs_deck(tmp_path)
+    info = json.loads((deck / "forward_deck.json").read_text())
+    info["p0_pa"] = 1e6                       # MPa-class drive: the water path is nonlinear
+    (deck / "forward_deck.json").write_text(json.dumps(info))
+    with pytest.warns(UserWarning, match="LINEAR"):
+        F.free_field_rs(deck, backend="numpy")
+
+
+@requires_rs
+def test_free_field_rs_is_quiet_at_the_default_drive(tmp_path):
+    deck = _rs_deck(tmp_path)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        F.free_field_rs(deck, backend="numpy")
+
+
+def test_forward_comparison_records_which_twin_produced_it():
+    tc = F.focal_metrics(*_metrics_args(1.0))
+    ff = F.focal_metrics(*_metrics_args(2.0))
+    cmp = F.ForwardComparison.from_metrics(tc, ff)
+    cmp.free_field_method = "rs"
+    assert json.loads(json.dumps(cmp.to_dict()))["free_field_method"] == "rs"
+
+
+def _metrics_args(peak):
+    target = (6, 6, 6)
+    box = _box(target, fb=6)
+    tr = _sinusoid_box(box, target, np.zeros(3), peak=peak)
+    return tr, box, np.asarray(target, float), 1.0
+
+
+def test_cli_forward_free_field_flag_parses():
+    for mode in ("fullwave", "rs", "none"):
+        args = cli.build_parser().parse_args(
+            ["forward", "--sim", "s", "--out", "o", "--free-field", mode])
+        assert args.free_field == mode
+
+
+# ---------------------------------------------------------------------------
+# forward_peak_volumes: the figure distillate, with either twin
+# ---------------------------------------------------------------------------
+
+def _solved_deck(tmp_path):
+    """A transcranial deck with a fake genout, so the distillate can be exercised without a
+    GPU. The traces are arbitrary -- only the reduction is under test -- but the FRAME
+    COUNT must stay the deck's own: the analytic twin honours the same record window, so a
+    truncated one legitimately drops every arrival and hands back an empty volume."""
+    deck = _rs_deck(tmp_path)
+    box = np.load(deck / "box_vox.npy")
+    info = json.loads((deck / "forward_deck.json").read_text())
+    tr = np.random.default_rng(0).normal(
+        size=(int(info["n_frames_expected"]), len(box))).astype("<f4")
+    tr.tofile(deck / "genout.dat")
+    return deck.parent, tr, box
+
+
+@requires_rs
+def test_peak_volumes_falls_back_to_the_analytic_twin(tmp_path):
+    """A --free-field rs run writes no free_field deck; the figure must still be drawable."""
+    from skull_transparency.report import forward_peak_volumes
+    out, tr, box = _solved_deck(tmp_path)
+    assert not (out / "free_field").exists()
+    peaks = forward_peak_volumes(out, rs_kwargs=dict(backend="numpy"))
+    assert peaks["free_field_method"] == "rs"
+    assert peaks["transcranial"].shape == peaks["free_field"].shape
+    assert np.isfinite(peaks["free_field"]).all() and peaks["free_field"].max() > 0
+    # the transcranial volume is the peak |p| of the traces, scattered onto the box lattice
+    lo = np.asarray(peaks["origin_vox"], int)
+    got = peaks["transcranial"][tuple((np.asarray(box, int) - lo).T)]
+    assert np.allclose(got, np.abs(tr).max(0), rtol=1e-6)
+
+
+@requires_rs
+def test_peak_volumes_fullwave_mode_omits_a_missing_twin(tmp_path):
+    """free_field='fullwave' must NOT silently substitute the analytic one."""
+    from skull_transparency.report import forward_peak_volumes
+    out, _, _ = _solved_deck(tmp_path)
+    peaks = forward_peak_volumes(out, free_field="fullwave")
+    assert "free_field" not in peaks and "transcranial" in peaks
+
+
+@requires_rs
+def test_peak_volumes_round_trips_the_method_through_the_npz(tmp_path):
+    """The figure reads this back to label the row, so it must survive np.savez."""
+    from skull_transparency.report import forward_peak_volumes
+    out, _, _ = _solved_deck(tmp_path)
+    npz = out / "focal_peaks.npz"
+    forward_peak_volumes(out, npz, rs_kwargs=dict(backend="numpy"))
+    got = dict(np.load(npz))
+    assert str(np.asarray(got["free_field_method"]).item()) == "rs"
+
+
+def test_peak_volumes_rejects_a_bad_mode(tmp_path):
+    from skull_transparency.report import forward_peak_volumes
+    with pytest.raises(ValueError, match="auto"):
+        forward_peak_volumes(tmp_path, free_field="bogus")

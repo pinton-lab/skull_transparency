@@ -92,30 +92,79 @@ sampled in world mm, so they stay correct for any grid pose and either species' 
 
 `run_forward_comparison.py` drives the bowl forward twice on one grid — once through the
 skull, once with the skull replaced by water — and compares the pressure at the target.
-Because a full-size TIPS (80 mm focal length) would need a ~110 mm domain at the 0.128 mm
-pitch this case requires, the bowl is **geometrically similar**: the same 35.1° half-angle
-and f/0.87, at an 18 mm radius of curvature that fits. It crosses the same skull at the same
-angles; only the wavefront curvature at the bone differs, which is second order for bone a
-tenth of a wavelength thick.
+The bowl is the **real TIPS**: 80 mm radius of curvature, 92 mm aperture, f/0.87.
 
 | | transcranial | free field |
 |---|---|---|
-| pressure **at the target** | 8.07 Pa | 13.41 Pa |
-| peak anywhere in the ±3 mm box | 23.75 Pa | 13.67 Pa |
-| distance of that peak from the target | 2.13 mm | 0.84 mm |
+| pressure **at the target** | 35.83 Pa | 59.12 Pa |
+| peak anywhere in the ±3 mm box | 101.36 Pa | 59.15 Pa |
+| distance of that peak from the target | 2.17 mm | 0.41 mm |
 
-**Insertion loss at the target is 0.60× (−4.4 dB).** But the skull does not simply absorb
+**Insertion loss at the target is 0.606× (−4.35 dB).** But the skull does not simply absorb
 that energy — it *moves* it: the hottest point in the box is 1.7× brighter than the
-free-field focus and sits 2.1 mm away, a coherent interference maximum rather than a
+free-field focus and sits 2.2 mm away, a coherent interference maximum rather than a
 focus. At 1 MHz the mouse calvaria is a tenth of a wavelength thick, so it is a poor
 absorber and a strong aberrator, which is the same story the 18 dB spread in the
 transparency map tells. Quoting the box maximum alone would report a spurious *gain*; the
 at-target number is the one that doses the cerebellum.
 
-Two checks that the pair is trustworthy: the free-field focal gain matches the analytic
-focused-bowl value (2π/λ)·R·(1−cos θ½) = 13.36 Pa per 1 Pa of surface drive to **0.4 %**,
-and neither peak lies on the recording-box boundary. The free-field focus sitting 0.84 mm
-proximal of the geometric target is the expected pull for a bowl of this low Fresnel number.
+Two checks that the pair is trustworthy: the free-field peak matches the analytic
+focused-bowl gain (2π/λ)·R·(1−cos θ½) = 59.36 Pa per 1 Pa of surface drive to **0.3 %**,
+and neither peak lies on the recording-box boundary.
+
+![Transcranial vs free-field focal fields](forward_fields.png)
+
+Both rows share one colour scale, so they are read directly against each other: cyan `+`
+is the target, white `×` the brightest point in the box. The free-field focus (bottom) is
+round and centred on the target. Through the skull (top) it is dimmer, smeared, and the
+brightest point has moved off target — the axial panel shows where the energy went
+instead. There is no bone in these panels because the calvaria is ~6 mm away and the box
+is only ±3 mm.
+
+`make_forward_figure.py` regenerates this from **one** solve rather than two: only the
+transcranial half needs the solver, and the all-water twin comes from `free_field_rs`.
+On this deck that route reproduces the two-solve insertion loss to 0.05 dB (−4.40 vs
+−4.35 dB) in about a third of the time. It writes `forward/focal_peaks.npz` — peak |p| per
+box point — so the multi-GB traces can be deleted and the figure still redraws in a second.
+
+### The substitute bowl this replaced, and what it got right
+
+Until 2026-08-26 this section quoted an **18 mm** bowl instead — geometrically similar to
+the TIPS (same 35.1° half-angle, same f/0.87) but short enough to fit. The full-size bowl
+did not fit because `surround_mm` pads all six faces of the domain, so buying 80 mm of
+stand-off with it cost `(head + 2·80)³` = 6.6 G cells and 147 GiB of medium maps at this
+pitch. Sizing the domain to the union of the head and the transducer instead
+(`build_brain_center_run(include_points_mm=...)`) puts the real bowl in 0.755 G cells —
+8.7× smaller, and runnable. `SUBSTITUTE_BOWL=1` reproduces the old numbers.
+
+The substitute turns out to have been a good one. Everything that depends on the f-number
+and the incidence angles is reproduced; only the Fresnel number changes:
+
+| | substitute, ROC 18 mm | real TIPS, ROC 80 mm |
+|---|---|---|
+| insertion loss at target | 0.60× (−4.4 dB) | **0.606× (−4.35 dB)** |
+| hot spot / free-field focus | 1.74× | 1.71× |
+| hot spot distance from target | 2.13 mm | 2.17 mm |
+| free-field focus, proximal pull | 0.84 mm | **0.41 mm** |
+| Fresnel number a²/λR | 3.9 | 17.2 |
+
+So the old argument — that only the wavefront curvature at the bone differs, and that this
+is second order for bone a tenth of a wavelength thick — was right, and is now measured
+rather than argued. The one quantity it did get wrong is the free-field focal shift, which
+is a property of the bowl's Fresnel number rather than of the skull: the stubby substitute
+pulls its focus twice as far proximal as the real device does.
+
+### Cross-check against the analytic twin
+
+The free-field half of this pair is a bowl radiating into uniform water, which
+`--free-field rs` integrates exactly instead of solving
+(`skull_transparency.forward.free_field_rs`). On this deck it agrees with the full-wave
+twin to **0.4 %** (59.38 vs 59.15 Pa) and gives the same insertion loss to 0.03 dB
+(−4.38 vs −4.35 dB) — in **3.3 s** against ~40 min for the second solve.
+
+That agreement is itself a resolution check. The saimiri case, the same comparison at
+**6** PPW, has the two twins 3.9 % apart with the full-wave one low; here at **12** PPW the
+gap is 0.4 %. Same physics, same code, finer grid.
 
 Caveat: the hot-spot position is set by coherent interference, so it shifts with frequency,
 pose, and drive bandwidth — treat 2.1 mm as "the peak leaves the target", not as a
@@ -128,7 +177,10 @@ reproducible coordinate.
   antero-posteriorly. Lateral targeting is selective; axial is not.
 - **The central hole is not modelled.** `TransducerSpec` describes the TIPS as a filled
   annular bowl; the 20.5 mm inner radius affects the drive and side-lobe structure, not the
-  window search (which depends only on the cone half-angle).
+  window search (which depends only on the cone half-angle). The forward pair now uses the
+  device's real focal length and real *outer* aperture, so this hole is what still separates
+  it from the real annulus — it will raise the side lobes and narrow the main lobe relative
+  to the numbers above.
 - **Dry skull.** The specimen has no scalp or soft tissue, and the intensity ramp maps the
   (air-filled) cranial cavity to water — the standard choice for this dataset, but it means
   the model is a skull-in-water problem, not an in-vivo one.

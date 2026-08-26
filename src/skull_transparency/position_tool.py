@@ -121,5 +121,6 @@ def view_napari(tmap, placement):
     v = napari.Viewer(title="skull-transparency placement")
     for data, kwargs, _kind in transparency_layers(tmap, placement):
         v.add_points(data, **kwargs)
+    v.dims.ndisplay = 3          # every layer here is a 3-D point cloud; 2-D opens on one slice
     napari.run()
     return v
