@@ -14,7 +14,7 @@ from scipy.ndimage import map_coordinates
 
 from .metrics import peak_intensity, distance_correct
 from .registration import Registration
-from .surface import extract_external_surface, true_normals
+from .surface import extract_external_surface, smooth_on_surface, true_normals
 
 _LEGACY_KEYS = ("surf_vox", "rhat", "Iint", "Pmax", "Ipk_Wcm2", "rad_mm")
 
@@ -29,6 +29,12 @@ class TransparencyOptions:
     rho0: float = 1000.0
     c0: float = 1540.0
     normal_smooth: float = 1.0          # gaussian sigma for the gradient normal
+    smooth_mm: float = 0.0              # along-surface gaussian sigma on Pmax/Iint before the metric
+    #   The surface field carries sub-wavelength speckle, about half of it from the voxel
+    #   staircase of the bone boundary (it changes when the skull is rotated against the grid).
+    #   ~2 voxels (lambda/3 at 6 PPW; 1 mm at 500 kHz) removes it: on the ITRUSST skull the
+    #   two voxelizations then agree to 0.23 dB median, and smoothing further only erodes real
+    #   structure that both voxelizations share. 0 = raw.
 
 
 @dataclass
@@ -90,9 +96,12 @@ def compute_transparency_map(source, options: TransparencyOptions = Transparency
         Pout = surf_vox + o.standoff_pad_vox * rhat
         Ival = map_coordinates(Iint_vol, (Pout / mod).T, order=1)
         Pval = map_coordinates(Pmax_vol, (Pout / mod).T, order=1)
+    if o.smooth_mm:
+        Pval = smooth_on_surface(surf_vox, Pval, o.smooth_mm / dx_mm)
+        Ival = smooth_on_surface(surf_vox, Ival, o.smooth_mm / dx_mm)
     rad_mm = np.linalg.norm(surf_vox - target_fullres, axis=1) * dx_mm
     Ipk_Wcm2 = peak_intensity(Pval, o.rho0, o.c0) / 1e4
-    nrm = true_normals(c, surf_vox, o.bone_threshold, o.normal_smooth)
+    nrm = true_normals(c, surf_vox, o.bone_threshold, o.normal_smooth, c_water=o.c0)
 
     base = Ipk_Wcm2 if o.metric == "peak_intensity" else Ival
     value = distance_correct(base, rad_mm) if o.distance_correct else np.asarray(base, float)
@@ -101,7 +110,7 @@ def compute_transparency_map(source, options: TransparencyOptions = Transparency
         surf_vox=surf_vox, rhat=rhat, true_normal=nrm,
         Iint=Ival, Pmax=Pval, Ipk_Wcm2=Ipk_Wcm2, rad_mm=rad_mm, value=value,
         registration=bundle.registration,
-        meta={"metric": o.metric, "distance_correct": o.distance_correct,
+        meta={"metric": o.metric, "distance_correct": o.distance_correct, "smooth_mm": o.smooth_mm,
               "target_mni_mm": list(bundle.target.get("mni_ras_mm", [])),
               "dx_mm": dx_mm, "units": "Ipk W/cm^2; Iint Pa^2.samples; Pmax Pa"},
     )
