@@ -236,20 +236,25 @@ def fig_medium():
     plt.close(fig)
 
 
-def fig_braincenter(bundle=None):
+def fig_braincenter(bundle=None, smooth_vox=2.0):
     """Real whole-skull transparency from the brain-center run: one omnidirectional
     source at the atlas brain CoM (MNI 0,-22,9), 1/r^2-corrected. Rendered straight from
     the shipped library (``render_transparency_surface``) so the figure IS the tool.
 
     ``bundle`` defaults to the ``halle_braincenter`` Field Bundle under
-    ``$SKULL_TR_DATA_ROOT`` (see ``skull_transparency.paths``)."""
+    ``$SKULL_TR_DATA_ROOT`` (see ``skull_transparency.paths``). The surface field is smoothed
+    along the skull by ``smooth_vox`` grid voxels (``TransparencyOptions.smooth_mm``), which
+    removes the voxel-staircase speckle of the bone boundary."""
     import sys
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
     import skull_transparency as st
     if bundle is None:
         from skull_transparency import paths
         bundle = paths.bundle_dir("halle_braincenter")
-    tmap = st.compute_transparency_map(st.load_bundle(bundle))
+    b = st.load_bundle(bundle)
+    smooth_mm = smooth_vox * b.grid["dx_m"] * 1e3
+    tmap = st.compute_transparency_map(b, st.TransparencyOptions(smooth_mm=smooth_mm))
+    print(f"  braincenter: smooth_mm = {smooth_mm:.2f} ({smooth_vox:g} voxels)")
     st.render_transparency_surface(
         tmap, os.path.join(OUT, "fig_braincenter.png"), dpi=200,
         title="Brain-center whole-skull transparency  (omnidirectional source at the "
