@@ -121,12 +121,18 @@ def _cmd_prepare(args):
     return 0
 
 
+def _smooth_kw(args):
+    """``--smooth-mm`` -> TransparencyOptions kwargs (absent / 0 = the raw per-patch field)."""
+    return {"smooth_mm": float(getattr(args, "smooth_mm", 0.0) or 0.0)}
+
+
 def _cmd_transparency(args):
     import skull_transparency as st
     bundle = st.load_bundle(args.bundle)
     thr = (args.bone_threshold if args.bone_threshold is not None
            else float(bundle.physics.get("bone_threshold", 2200.0)))   # bundle carries the medium's cutoff
-    opts = st.TransparencyOptions(distance_correct=not args.no_distance_correct, bone_threshold=thr)
+    opts = st.TransparencyOptions(distance_correct=not args.no_distance_correct, bone_threshold=thr,
+                                  **_smooth_kw(args))
     tmap = st.compute_transparency_map(bundle, options=opts, log=(print if args.verbose else None))
     if args.save_npz:
         tmap.to_npz(args.save_npz)
@@ -145,7 +151,8 @@ def _cmd_place(args):
     out.mkdir(parents=True, exist_ok=True)
 
     bundle = st.load_bundle(args.bundle)
-    tmap = st.compute_transparency_map(bundle, log=(print if args.verbose else None))
+    tmap = st.compute_transparency_map(bundle, options=st.TransparencyOptions(**_smooth_kw(args)),
+                                       log=(print if args.verbose else None))
     tmap.to_npz(out / "surface_map.npz")
 
     if args.transducer:
@@ -182,7 +189,8 @@ def _cmd_position(args):
     import skull_transparency as st
     from .position_tool import preview_placement, view_napari
     bundle = st.load_bundle(args.bundle)
-    tmap = st.compute_transparency_map(bundle, log=(print if args.verbose else None))
+    tmap = st.compute_transparency_map(bundle, options=st.TransparencyOptions(**_smooth_kw(args)),
+                                       log=(print if args.verbose else None))
     bc = (_load_transducer(args.transducer).to_bowl_constraints(focal_length_mm=args.focal_length)
           if args.transducer else st.BowlConstraints(focal_length_mm=args.focal_length or 60.0))
     pl = st.place_bowl(tmap, bc)
@@ -223,7 +231,8 @@ def _cmd_explore(args):
         return 0
     bundle_path, tname = _resolve_bundle(args)
     from .position_tool import preview_placement, view_napari
-    tmap = st.compute_transparency_map(st.load_bundle(bundle_path))
+    tmap = st.compute_transparency_map(st.load_bundle(bundle_path),
+                                       options=st.TransparencyOptions(**_smooth_kw(args)))
     bc = (_load_transducer(args.transducer).to_bowl_constraints(focal_length_mm=args.focal_length)
           if args.transducer else st.BowlConstraints(focal_length_mm=args.focal_length or 60.0))
     pl = st.place_bowl(tmap, bc)
@@ -248,7 +257,8 @@ def _cmd_report(args):
     import skull_transparency as st
     from .report import write_report
     bundle_path, tname = _resolve_bundle(args)
-    tmap = st.compute_transparency_map(st.load_bundle(bundle_path))
+    tmap = st.compute_transparency_map(st.load_bundle(bundle_path),
+                                       options=st.TransparencyOptions(**_smooth_kw(args)))
     bc = (_load_transducer(args.transducer).to_bowl_constraints(focal_length_mm=args.focal_length)
           if args.transducer else st.BowlConstraints(focal_length_mm=args.focal_length or 60.0))
     pl = st.place_bowl(tmap, bc)
@@ -322,6 +332,9 @@ def build_parser():
     sp.add_argument("--target-name", default=None)
     sp.add_argument("--verbose", action="store_true")
     sp.add_argument("--out", required=True, help="output directory")
+    sp.add_argument("--smooth-mm", type=float, default=0.0,
+                    help="along-surface gaussian sigma (mm) on the field before the metric; ~2 voxels "
+                         "(1 mm at 500 kHz / 6 PPW) removes the voxel-staircase speckle (default 0 = raw)")
     sp.set_defaults(func=_cmd_place)
 
     sp = sub.add_parser("extract", help="solved run (genout_mod.dat) + sim tree -> Field Bundle")
@@ -342,6 +355,9 @@ def build_parser():
     sp.add_argument("--interactive", action="store_true", help="open the napari viewer (needs a display + [viz])")
     sp.add_argument("--verbose", action="store_true")
     sp.add_argument("--out", default=None, help="output PNG (default placement_preview.png)")
+    sp.add_argument("--smooth-mm", type=float, default=0.0,
+                    help="along-surface gaussian sigma (mm) on the field before the metric; ~2 voxels "
+                         "(1 mm at 500 kHz / 6 PPW) removes the voxel-staircase speckle (default 0 = raw)")
     sp.set_defaults(func=_cmd_position)
 
     sp = sub.add_parser("transparency",
@@ -356,6 +372,9 @@ def build_parser():
     sp.add_argument("--no-distance-correct", action="store_true",
                     help="raw peak intensity, no 1/r^2 spreading correction")
     sp.add_argument("--verbose", action="store_true")
+    sp.add_argument("--smooth-mm", type=float, default=0.0,
+                    help="along-surface gaussian sigma (mm) on the field before the metric; ~2 voxels "
+                         "(1 mm at 500 kHz / 6 PPW) removes the voxel-staircase speckle (default 0 = raw)")
     sp.set_defaults(func=_cmd_transparency)
 
     sp = sub.add_parser("run", help="prepare (+ the solve/extract/place chain to run next)")
@@ -368,6 +387,9 @@ def build_parser():
         g.add_argument("--bundle", help="a local Field Bundle directory instead")
         sp.add_argument("--transducer", help="TransducerSpec JSON for the window constraints")
         sp.add_argument("--focal-length", type=float, default=None)
+        sp.add_argument("--smooth-mm", type=float, default=0.0,
+                        help="along-surface gaussian sigma (mm) on the field before the metric; ~2 voxels "
+                             "(1 mm at 500 kHz / 6 PPW) removes the voxel-staircase speckle (default 0 = raw)")
 
     sp = sub.add_parser("explore",
                         help="open a transparency map interactively (napari) -- no GPU needed; "

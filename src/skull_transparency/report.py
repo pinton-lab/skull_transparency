@@ -341,15 +341,27 @@ def _map3d_figure(tmap):
     db = _db_amplitude(tmap.value)
     vlo, vhi = np.percentile(db, 25.0), np.percentile(db, 99.0)
     rhat = np.asarray(tmap.rhat, float)
+    try:                                   # a closed surface: dots on the voxel lattice leave
+        from .surface_render import draw_patch_surface, patch_surface   # gaps that read as rings
+        surf = patch_surface(tmap.surf_vox, rhat, db)
+        to_world = (tmap.registration.fullres_to_mni if tmap.registration is not None else None)
+    except ImportError:                    # no scikit-image: fall back to the point cloud
+        surf = None
+    to_world_pts = (tmap.registration.fullres_to_mni if tmap.registration is not None else None)
     fig = plt.figure(figsize=(16, 4.2))
     sc = None
     for k, (elev, azim) in enumerate([(18, -60), (18, 60), (18, 180), (78, -90)]):
         ax = fig.add_subplot(1, 4, k + 1, projection="3d")
         e, a = np.radians(elev), np.radians(azim)
         cam = np.array([np.cos(e) * np.cos(a), np.cos(e) * np.sin(a), np.sin(e)])
-        m = rhat @ cam > 0.0                                  # camera-facing hemisphere
-        sc = ax.scatter(*P[m].T, c=db[m], cmap="inferno", vmin=vlo, vmax=vhi, s=4,
-                        linewidths=0)
+        if surf is not None:
+            sc = draw_patch_surface(ax, surf, cam=cam, cmap="inferno", vmin=vlo, vmax=vhi,
+                                    to_world=to_world)
+        else:
+            from .surface_render import _rhat_in_frame
+            m = _rhat_in_frame(rhat, to_world_pts) @ cam > 0.0  # camera-facing hemisphere
+            sc = ax.scatter(*P[m].T, c=db[m], cmap="inferno", vmin=vlo, vmax=vhi, s=4,
+                            linewidths=0)
         ax.view_init(elev=elev, azim=azim)
         ax.set_box_aspect((1, 1, 1))
         lo, hi = P.min(0), P.max(0)

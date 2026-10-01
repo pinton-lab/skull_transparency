@@ -55,13 +55,25 @@ def render_transparency_surface(tmap, out_png, *, title=None, cmap="inferno",
     vlo = max(float(np.percentile(disp, clip[0])), db_floor)
     vhi = 0.0
 
+    try:                          # a closed surface: dots on the voxel lattice leave gaps that
+        from .surface_render import draw_patch_surface_2d, patch_surface   # read as rings
+        surf = patch_surface(surf_vox, tmap.rhat, disp)
+        to_world = (tmap.registration.fullres_to_mni
+                    if tmap.registration is not None and use_mni else None)
+    except ImportError:           # no scikit-image: the depth-sorted point cloud
+        surf = None
+
     fig, axes = plt.subplots(1, 3, figsize=(12.5, 4.4))
     sc = None
     for ax, (name, h, v) in zip(axes, _VIEWS):
-        depth = sorted(set(range(3)) - {h, v})[0]            # the out-of-plane axis
-        order = np.argsort(pts[:, depth])                    # far -> near (near drawn last/on top)
-        sc = ax.scatter(pts[order, h], pts[order, v], c=disp[order], s=point_size,
-                        cmap=cmap, vmin=vlo, vmax=vhi, linewidths=0, rasterized=True)
+        if surf is not None:
+            sc = draw_patch_surface_2d(ax, surf, h, v, cmap=cmap, vmin=vlo, vmax=vhi,
+                                       to_world=to_world)
+        else:
+            depth = sorted(set(range(3)) - {h, v})[0]        # the out-of-plane axis
+            order = np.argsort(pts[:, depth])                # far -> near (near drawn last/on top)
+            sc = ax.scatter(pts[order, h], pts[order, v], c=disp[order], s=point_size,
+                            cmap=cmap, vmin=vlo, vmax=vhi, linewidths=0, rasterized=True)
         ax.set_aspect("equal")
         ax.set_xlabel(_LABELS[h]); ax.set_ylabel(_LABELS[v])
         ax.set_title(name, fontsize=10)

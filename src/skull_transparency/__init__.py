@@ -2,7 +2,8 @@
 and transducer placement for transcranial ultrasound."""
 from .registration import Registration
 from .bundle import FieldBundle, load_bundle, build_field_bundle
-from .surface import extract_external_surface, true_normals
+from .surface import extract_external_surface, true_normals, bone_occupancy, smooth_on_surface
+from .rasterize import mesh_fraction, shell_speed_map
 from .metrics import integrate_outward, peak_intensity, distance_correct
 from .transparency import compute_transparency_map, TransparencyMap, TransparencyOptions
 from .placement import (place_bowl, BowlConstraints, BowlPlacement,
@@ -25,7 +26,8 @@ from .render import render_transparency_surface
 __all__ = [
     "Registration",
     "FieldBundle", "load_bundle", "build_field_bundle",
-    "extract_external_surface", "true_normals",
+    "extract_external_surface", "true_normals", "bone_occupancy", "smooth_on_surface",
+    "mesh_fraction", "shell_speed_map",
     "integrate_outward", "peak_intensity", "distance_correct",
     "compute_transparency_map", "TransparencyMap", "TransparencyOptions",
     "place_bowl", "BowlConstraints", "BowlPlacement",
