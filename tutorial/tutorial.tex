@@ -256,7 +256,7 @@ way, so the unimplemented \code{approach='auto'} never arises):
 \begin{lstlisting}[style=sh]
 skull-transparency prepare --c-map c.nii.gz --center --transducer ctx500.json --out run/
 #  ... outward GPU solve + extract (Section 7) ...
-skull-transparency transparency --bundle run/bundle --out transparency.png
+skull-transparency transparency --bundle run/bundle --smooth-mm 0.56 --out transparency.png
 \end{lstlisting}
 \code{--center} sizes a cube around the whole head and seats the source at the brain
 center: the \textbf{atlas center of mass} when the medium is in (or registered to) MNI --
@@ -267,13 +267,16 @@ only $\sim$2~cm accurate on a \emph{dry} specimen skull whose vault is open, so 
 atlas path when a registration exists). The \code{transparency} subcommand then computes
 the $1/r^2$-corrected map (\code{compute_transparency_map}, distance correction on by
 default) and renders it as transmitted amplitude in decibels
-(\code{render_transparency_surface}, the log-$|p|$ convention).
+(\code{render_transparency_surface}, the log-$|p|$ convention). \code{--smooth-mm} smooths
+the field along the skull first; about two grid voxels (here $0.56$~mm on the $0.28$~mm
+grid) removes the fine speckle that the voxel staircase of the bone boundary scatters
+into the map, without touching the centimetre-scale windows.
 
 \begin{figure}[H]\centering
 \includegraphics[width=\linewidth]{figs/fig_braincenter.png}
 \caption{Whole-skull transparency for the reference Halle skull from a brain-center run
-($694{,}363$ surface patches, three anatomical projections; bright $=$ acoustically
-transparent bone). Colour is the $1/r^2$-corrected transmitted \emph{amplitude} in
+($694{,}363$ surface patches, three anatomical projections, smoothed along the surface over
+two voxels; bright $=$ acoustically transparent bone). Colour is the $1/r^2$-corrected transmitted \emph{amplitude} in
 decibels relative to the $98$th-percentile window -- the whole-skull convention is
 log~$|p|$, since linear intensity ($p^2$) has too wide a dynamic range and crushes most
 of the skull to black. One omnidirectional source sits at the atlas brain center of mass
