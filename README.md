@@ -1,5 +1,8 @@
 # skull_transparency
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/pinton-lab/skull_transparency/blob/main/notebooks/skull_transparency_colab_500kHz.ipynb)
+— run a whole-skull 500 kHz transparency map on a free Colab GPU, no install.
+
 Skull acoustic **transparency maps** (via time-reversal reciprocity) and **transducer placement**
 for transcranial focused ultrasound.
 
