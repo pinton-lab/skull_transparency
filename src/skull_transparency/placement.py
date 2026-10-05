@@ -36,7 +36,10 @@ class BowlConstraints:
     #   map removes the genuine proximity advantage and is for *visualising* bone transmission.
     region_center_mni_mm: np.ndarray | None = None   # optional spherical restriction
     region_radius_mm: float | None = None
-    legal_mask: np.ndarray | None = None  # (M,) bool of allowed patches (e.g. tuba vault/no-go)
+    legal_mask: np.ndarray | None = None  # (M,) bool of allowed window CENTRES (e.g. tuba vault/no-go)
+    exclude_mask: np.ndarray | None = None  # (M,) bool of patches the transducer must not TOUCH
+    #   (ears, scars, ...; see exclusion.Exclusion). Footprint-aware: a centre is legal only if no
+    #   excluded patch lies within bowl_radius_mm of it, so the whole bowl stays clear.
 
 
 @dataclass
@@ -114,6 +117,10 @@ def place_bowl(tmap: TransparencyMap, constraints: BowlConstraints = BowlConstra
         legal &= np.linalg.norm(surf_mni - np.asarray(c.region_center_mni_mm, float), axis=1) <= c.region_radius_mm
     if c.legal_mask is not None:
         legal &= np.asarray(c.legal_mask, bool)
+    if c.exclude_mask is not None:
+        from .exclusion import Exclusion
+        legal &= Exclusion(surf_mni, np.asarray(c.exclude_mask, bool).astype(np.int32),
+                           ["excluded"]).legal_centers(c.bowl_radius_mm)
     if not legal.any():
         raise ValueError("no legal patches under the given constraints")
 
@@ -172,6 +179,7 @@ class ArrayConstraints:
     region_center_mni_mm: np.ndarray | None = None
     region_radius_mm: float | None = None
     legal_mask: np.ndarray | None = None
+    exclude_mask: np.ndarray | None = None  # (M,) bool: patches no element may sit on (exclusion.Exclusion)
 
 
 @dataclass
@@ -217,6 +225,8 @@ def place_array(tmap: TransparencyMap, constraints: ArrayConstraints = ArrayCons
         legal &= np.linalg.norm(surf_mni - np.asarray(c.region_center_mni_mm, float), axis=1) <= c.region_radius_mm
     if c.legal_mask is not None:
         legal &= np.asarray(c.legal_mask, bool)
+    if c.exclude_mask is not None:
+        legal &= ~np.asarray(c.exclude_mask, bool)
     if not legal.any():
         raise ValueError("no legal patches under the given constraints")
 
@@ -380,14 +390,16 @@ class CapPlacement:
 
 
 def score_cap_pose(field: CapField, pose, bone_ray_test, *, roc_mm: float = 63.2,
-                   aperture_mm: float = 64.0, density: float = 1.0) -> dict:
+                   aperture_mm: float = 64.0, density: float = 1.0, exclusion=None) -> dict:
     """Score ONE pose: build the CTX-500 cap, drop no-bone (foramen) elements, project the
     recorded surface energy to each kept element and incidence-weight it, and sum.
 
     ``bone_ray_test(cap_pts, target_vox) -> kept_mask`` is injected (True == the element's ray to
     the target crosses bone == keep; False == no-bone foramen leak == drop). Keeping it a callable
     keeps this module free of the 1.38 GB medium and unit-testable. Returns a dict with ``J_cap``,
-    drop counts, and the window patch (beam-axis entry)."""
+    drop counts, and the window patch (beam-axis entry). With an ``exclusion``
+    (:class:`~skull_transparency.exclusion.Exclusion` of the same map) it also reports
+    ``covered``: the names of the exclusion zones the cap sits over (empty = clear)."""
     from .transducer import build_cap_pose
     roc_vox = roc_mm / field.dx_mm
     half = float(np.degrees(np.arcsin((aperture_mm / 2.0) / roc_mm)))
@@ -422,7 +434,10 @@ def score_cap_pose(field: CapField, pose, bone_ray_test, *, roc_mm: float = 63.2
     da = da / (np.linalg.norm(da) + 1e-30)
     wj = int(field.tree.query(da, workers=-1)[1])
     cos_w = float(np.clip(field.surf_dir[wj] @ field.normal[wj], -1.0, 1.0))
-    return dict(J_cap=J_cap, J_full=J_full, score_norm=score_norm,
+    covered = []
+    if exclusion is not None and n_cap and field.registration is not None:
+        covered = exclusion.covered(field.registration.fullres_to_mni(pts))
+    return dict(J_cap=J_cap, J_full=J_full, score_norm=score_norm, covered=covered,
                 n_cap=n_cap, n_kept=n_kept, n_dropped=n_cap - n_kept,
                 drop_frac=(n_cap - n_kept) / max(n_cap, 1), window_idx=wj,
                 window_vox=field.surf_vox[wj], window_dist_mm=float(field.rad_mm[wj]),
@@ -441,7 +456,7 @@ def _cap_placement_from_score(field: CapField, s: dict) -> CapPlacement:
         window_incidence_deg=s["window_incidence_deg"], apex_vox=s["apex"], aim_vox=s["aim"],
         focus_vox=s["focus"], focus_to_target_mm=foc_to_tgt,
         extras={"window_idx": s["window_idx"], "score_norm": s["score_norm"],
-                "J_full": s["J_full"]})
+                "J_full": s["J_full"], "covered_zones": list(s.get("covered", []))})
 
 
 def place_cap_optimal(field: CapField, bone_ray_test, *, seed_az_deg: float, seed_el_deg: float,
@@ -451,23 +466,25 @@ def place_cap_optimal(field: CapField, bone_ray_test, *, seed_az_deg: float, see
                       el_halfspan_deg: float = 50.0, n_az: int = 23, n_el: int = 21,
                       refine_pose: bool = True, tilt_span_deg: float = 12.0,
                       yaw_span_deg: float = 12.0, n_tilt: int = 7, n_yaw: int = 7,
-                      log=None) -> CapPlacement:
+                      exclusion=None, log=None) -> CapPlacement:
     """Maximise the after-drop cap objective J_cap over the CTX-500 pose, by a coarse (az, el)
     sweep around ``(seed_az_deg, seed_el_deg)`` (straight aim, standoff == ROC), then a local
     tilt/yaw/az/el refinement, with a final full-density re-score of the winner. The window is
     constrained incidence-legal (beam-axis patch incidence <= ``theta_max_deg``). Pure
     post-processing — every score is a moving-cap summation on the one recorded field, no wave
-    solve. Returns a :class:`CapPlacement`."""
+    solve. With an ``exclusion`` (:class:`~skull_transparency.exclusion.Exclusion`), poses whose
+    cap sits over an excluded zone are illegal. Returns a :class:`CapPlacement`."""
     from .transducer import CapPose
     radius_mm = roc_mm if radius_mm is None else radius_mm
     _log = (lambda *_: None) if log is None else log
 
     def score(az, el, tilt=0.0, yaw=0.0, density=search_density):
         return score_cap_pose(field, CapPose(az, el, radius_mm, tilt, yaw), bone_ray_test,
-                              roc_mm=roc_mm, aperture_mm=aperture_mm, density=density)
+                              roc_mm=roc_mm, aperture_mm=aperture_mm, density=density,
+                              exclusion=exclusion)
 
     def legal(s):
-        return s["window_incidence_deg"] <= theta_max_deg and s["n_kept"] > 0
+        return s["window_incidence_deg"] <= theta_max_deg and s["n_kept"] > 0 and not s["covered"]
 
     # ---- 1) coarse (az, el) sweep, straight aim ----
     azs = seed_az_deg + np.linspace(-az_halfspan_deg, az_halfspan_deg, n_az)
@@ -479,7 +496,8 @@ def place_cap_optimal(field: CapField, bone_ray_test, *, seed_az_deg: float, see
             if legal(s) and (best is None or s["J_cap"] > best["J_cap"]):
                 best = s
     if best is None:
-        raise ValueError("no incidence-legal pose found in the coarse sweep")
+        raise ValueError("no incidence-legal pose found in the coarse sweep"
+                         + (" outside the exclusion zones" if exclusion is not None else ""))
     _log(f"[cap] coarse best az{best['pose'].az_deg:+.0f} el{best['pose'].el_deg:+.0f} "
          f"J={best['J_cap']:.3e} drop={100*best['drop_frac']:.2f}% inc={best['window_incidence_deg']:.0f}")
 
@@ -505,7 +523,7 @@ def place_cap_optimal(field: CapField, bone_ray_test, *, seed_az_deg: float, see
 
     # ---- 4) final full-density re-score of the winning pose ----
     final = score_cap_pose(field, best["pose"], bone_ray_test, roc_mm=roc_mm,
-                           aperture_mm=aperture_mm, density=final_density)
+                           aperture_mm=aperture_mm, density=final_density, exclusion=exclusion)
     return _cap_placement_from_score(field, final)
 
 

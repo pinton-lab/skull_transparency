@@ -22,6 +22,7 @@ from .sample import make_synthetic_bundle
 from .brain_center import (MNI_BRAIN_COM_MM, intracranial_centroid, cavity_mask_centroid,
                            brain_center_phys_mm, brain_center_from_registration)
 from .render import render_transparency_surface
+from .exclusion import Zone, EAR_ZONES, Exclusion, zone_mask, image_mask
 
 __all__ = [
     "Registration",
